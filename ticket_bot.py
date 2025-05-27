@@ -135,4 +135,4 @@ async def ping(ctx):
 async def ltc(ctx):
     await ctx.send("🚀 Here’s the Litecoin address: `LeYqdR1y6EEASgV2Uf5oc1ABkeAHaMmjXx`")
 
-bot.run("")
+bot.run(os.getenv("DISCORD_TOKEN"))
