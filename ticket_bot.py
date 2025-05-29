@@ -19,7 +19,7 @@ open_tickets = {}
 
 @bot.event
 async def on_ready():
-    print(f'✅ Bot {bot.user} is ready!')
+    print(f'✅ Bot {bot.user} is online.')
 
 @bot.command()
 async def setup(ctx):
@@ -75,8 +75,8 @@ async def on_interaction(interaction):
 
         async def auto_close():
             await asyncio.sleep(AUTO_CLOSE_TIME)
-            if ticket_channel and ticket_channel in guild.text_channels:
-                await ticket_channel.send("⏳ No response for 30 minutes. Closing ticket.")
+            if ticket_channel in guild.text_channels:
+                await ticket_channel.send("⏳ No response for 30 minutes. Closing the ticket.")
                 await ticket_channel.delete()
                 open_tickets.pop(key, None)
                 if log_channel:
@@ -86,22 +86,22 @@ async def on_interaction(interaction):
 
 @bot.command()
 async def ping(ctx):
-    if ctx.channel.category_id != CATEGORY_ID:
-        await ctx.send("This command can only be used in a ticket.")
-        return
-    try:
-        user_id = int(ctx.channel.topic)
-        user = ctx.guild.get_member(user_id)
-        if user:
-            await user.send(f"👋 Hey {user.mention}, please check your ticket for updates!")
-            await ctx.send(f"✅ DM sent to {user.mention}!")
-    except:
-        await ctx.send("❌ Could not DM the user.")
+    if ctx.channel.category_id == CATEGORY_ID:
+        try:
+            opener_id = int(ctx.channel.topic)
+            user = ctx.guild.get_member(opener_id)
+            if user:
+                await user.send(f"👋 Hey {user.mention}, please check your ticket for updates!")
+                await ctx.send(f"✅ DM sent to {user.mention}!")
+        except:
+            await ctx.send("❌ Could not DM the user.")
+    else:
+        await ctx.send("❌ This command can only be used in a ticket.")
 
 @bot.command()
 async def close(ctx):
     if ctx.channel.category_id != CATEGORY_ID:
-        await ctx.send("This command can only be used in a ticket.")
+        await ctx.send("❌ This command can only be used in a ticket.")
         return
 
     class CloseView(discord.ui.View):
@@ -132,7 +132,7 @@ async def close(ctx):
             if log_channel:
                 await log_channel.send(f"✅ Ticket auto-closed: {ctx.channel.name}")
 
-    await ctx.send("Are you sure you want to close this ticket?", view=CloseView())
+    await ctx.send("Are you sure you want to close the ticket?", view=CloseView())
 
 @bot.command()
 async def pp(ctx):
