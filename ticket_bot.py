@@ -21,15 +21,16 @@ CATEGORIES = {
     "reseller": "Reseller"
 }
 
+TICKET_CREATOR = {}
+
 @bot.event
 async def on_ready():
     print(f'Bot {bot.user} is ready!')
 
 @bot.command()
 @commands.has_permissions(manage_channels=True)
-async def setup_ticket(ctx):
-    embed = discord.Embed(title="Support", description="Select a category below to open a ticket.", color=0x9b59b6)
-    embed.set_footer(text="Tickets will auto-close in 30 minutes if no reply.")
+async def setup(ctx):
+    embed = discord.Embed(title="Support", description="Select a category below to open a ticket.\nTickets auto-close in 30 minutes if no reply.", color=0x9b59b6)
     view = discord.ui.View()
     for custom_id, label in CATEGORIES.items():
         emoji = {
@@ -52,28 +53,32 @@ async def on_interaction(interaction):
         if ticket_category is None:
             ticket_category = await guild.create_category("Tickets")
 
+        existing_channel = discord.utils.get(ticket_category.channels, name=f"{category_id}-{interaction.user.name}".replace(" ", "-").lower())
+        if existing_channel:
+            await interaction.response.send_message("You already have an open ticket in this category.", ephemeral=True)
+            return
+
         channel_name = f"{category_id}-{interaction.user.name}".replace(" ", "-").lower()
-        channel = await ticket_category.create_text_channel(channel_name, topic=str(interaction.user.id))  # 🛠️ Set user ID in topic
+        channel = await ticket_category.create_text_channel(channel_name)
 
         await channel.set_permissions(guild.default_role, read_messages=False, send_messages=False)
         await channel.set_permissions(interaction.user, read_messages=True, send_messages=True)
         await channel.set_permissions(guild.get_role(OWNER_ROLE_ID), read_messages=True, send_messages=True)
         await channel.set_permissions(guild.get_role(STAFF_ROLE_ID), read_messages=True, send_messages=True)
 
+        TICKET_CREATOR[channel.id] = interaction.user.id
+
         msg = (
             f"{interaction.user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist! 🛠️\n\n"
-            f"📌 {interaction.user.mention}, please describe your issue or the service you're requesting.\n"
+            f"📌 **Please describe your issue or request.**\n"
+            f"💳 **Payment Methods:**\n"
+            f"+ <:Paypal:1374290794340548619> PayPal (F&F)\n"
+            f"+ <:PurpleCashApp:1374290682835107892> Cash App\n"
+            f"+ <:Apple_Pay_Logo:1374291214983102474> Apple Pay\n"
+            f"+ <:Zelle:1374291283329286194> Zelle\n"
+            f"+ <:emojigg_ltc:1374291116966412348> Litecoin (LTC)\n"
+            f"\nA staff member will assist you shortly. Thank you for your patience! 💙"
         )
-        if category_id == "reseller":
-            msg += (
-                f"💸 **Payment Methods:**\n"
-                f"+ <:Paypal:1374290794340548619> PayPal (F&F)\n"
-                f"+ <:PurpleCashApp:1374290682835107892> Cash App\n"
-                f"+ <:Apple_Pay_Logo:1374291214983102474> Apple Pay\n"
-                f"+ <:Zelle:1374291283329286194> Zelle\n"
-                f"+ <:emojigg_ltc:1374291116966412348> Litecoin (LTC)\n"
-            )
-        msg += "\nA staff member will assist you shortly. Thank you for your patience! 💙"
         await channel.send(msg)
 
         log_channel = bot.get_channel(LOG_CHANNEL_ID)
@@ -135,32 +140,31 @@ async def close(ctx):
 
 @bot.command()
 @commands.has_permissions(manage_channels=True)
-async def add(ctx, member: discord.Member):
-    if ctx.channel.category and ctx.channel.category.name == "Tickets":
-        await ctx.channel.set_permissions(member, read_messages=True, send_messages=True)
-        await ctx.send(f"✅ {member.mention} has been added to this ticket.")
+async def ping(ctx):
+    if ctx.channel.id in TICKET_CREATOR:
+        user_id = TICKET_CREATOR[ctx.channel.id]
+        user = ctx.guild.get_member(user_id)
+        if user:
+            try:
+                await user.send(f"👋 {ctx.author.mention} asked you to check your ticket. Please review your ticket channel.")
+                await ctx.send("✅ DM sent to the ticket creator to check the ticket!")
+            except discord.Forbidden:
+                await ctx.send("❌ I couldn't DM the user. They might have DMs disabled.")
+        else:
+            await ctx.send("❌ The ticket creator could not be found.")
     else:
-        await ctx.send("❌ This command can only be used in ticket channels.")
+        await ctx.send("❌ No ticket creator data found for this channel.")
 
 @bot.command()
-@commands.has_permissions(manage_channels=True)
-async def ping(ctx):
-    if ctx.channel.category and ctx.channel.category.name == "Tickets":
-        try:
-            user_id = int(ctx.channel.topic)
-            user = ctx.guild.get_member(user_id)
-            if user:
-                await user.send(f"👋 Hey {user.mention}, please check your ticket for updates. You have been pinged by staff.")
-                await ctx.send(f"✅ DM sent to {user.mention}!")
-            else:
-                await ctx.send("❌ Could not find the ticket creator.")
-        except:
-            await ctx.send("❌ Could not DM the user. They may have DMs disabled.")
-    else:
-        await ctx.send("❌ This command can only be used in a ticket channel.")
+async def pp(ctx):
+    await ctx.send("💸 **PayPal**: https://www.paypal.com/paypalme/Hunter393?country.x=US&locale.x=en_US")
+
+@bot.command()
+async def cash(ctx):
+    await ctx.send("💸 **Cash App**: https://cash.app/$Tripussy")
 
 @bot.command()
 async def ltc(ctx):
-    await ctx.send("🚀 Here’s the Litecoin address: `LeYqdR1y6EEASgV2Uf5oc1ABkeAHaMmjXx`")
+    await ctx.send("🚀 **Litecoin Address**: LeYqdR1y6EEASgV2Uf5oc1ABkeAHaMmjXx")
 
 bot.run(os.getenv("DISCORD_TOKEN"))
