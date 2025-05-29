@@ -50,7 +50,8 @@ async def on_interaction(interaction):
         category_channel = guild.get_channel(CATEGORY_ID)
         ticket_channel = await guild.create_text_channel(
             name=f"{category}-{user.name}".replace(" ", "-").lower(),
-            category=category_channel
+            category=category_channel,
+            topic=str(user.id)
         )
         await ticket_channel.set_permissions(user, read_messages=True, send_messages=True)
         await ticket_channel.set_permissions(guild.default_role, read_messages=False)
@@ -91,7 +92,7 @@ async def ping(ctx):
             opener_id = int(ctx.channel.topic)
             user = ctx.guild.get_member(opener_id)
             if user:
-                await user.send(f"👋 Hey {user.mention}, please check your ticket for updates!")
+                await user.send(f"👋 Hey {user.mention}, please check your ticket for updates. You have been pinged by staff.")
                 await ctx.send(f"✅ DM sent to {user.mention}!")
         except:
             await ctx.send("❌ Could not DM the user.")
