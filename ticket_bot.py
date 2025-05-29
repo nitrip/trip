@@ -53,7 +53,7 @@ async def on_interaction(interaction):
             ticket_category = await guild.create_category("Tickets")
 
         channel_name = f"{category_id}-{interaction.user.name}".replace(" ", "-").lower()
-        channel = await ticket_category.create_text_channel(channel_name)
+        channel = await ticket_category.create_text_channel(channel_name, topic=str(interaction.user.id))
 
         await channel.set_permissions(guild.default_role, read_messages=False, send_messages=False)
         await channel.set_permissions(interaction.user, read_messages=True, send_messages=True)
@@ -156,7 +156,7 @@ async def reopen(ctx, user: discord.Member, category: str):
         ticket_category = await guild.create_category("Tickets")
 
     channel_name = f"{category}-{user.name}".replace(" ", "-").lower()
-    channel = await ticket_category.create_text_channel(channel_name)
+    channel = await ticket_category.create_text_channel(channel_name, topic=str(user.id))
     await channel.set_permissions(guild.default_role, read_messages=False, send_messages=False)
     await channel.set_permissions(user, read_messages=True, send_messages=True)
     await channel.set_permissions(guild.get_role(OWNER_ROLE_ID), read_messages=True, send_messages=True)
@@ -172,11 +172,19 @@ async def reopen(ctx, user: discord.Member, category: str):
 @bot.command()
 @commands.has_permissions(manage_channels=True)
 async def ping(ctx):
-    try:
-        await ctx.author.send(f"Hey {ctx.author.name}, please check your ticket for updates or questions from the staff. 🚀")
-        await ctx.send("✅ I've sent you a DM to check your ticket!", delete_after=5)
-    except discord.Forbidden:
-        await ctx.send("❌ I couldn't DM you. Please enable DMs from server members.")
+    if ctx.channel.category and ctx.channel.category.name == "Tickets":
+        try:
+            user_id = int(ctx.channel.topic)
+            user = ctx.guild.get_member(user_id)
+            if user:
+                await user.send(f"👋 Hey {user.mention}, please check your ticket for updates. You have been pinged by staff.")
+                await ctx.send(f"✅ DM sent to {user.mention}!")
+            else:
+                await ctx.send("❌ Could not find the ticket creator.")
+        except:
+            await ctx.send("❌ Could not DM the user. They may have DMs disabled.")
+    else:
+        await ctx.send("❌ This command can only be used in a ticket channel.")
 
 @bot.command()
 async def ltc(ctx):
