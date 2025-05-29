@@ -22,7 +22,11 @@ async def on_ready():
     print(f'✅ Bot {bot.user} is online.')
 
 @bot.command()
-async def setup(ctx):
+async def setup(ctx, arg=None):
+    if arg != "ticket":
+        await ctx.send("❌ Invalid command. Use `!setup ticket` to set up the ticket system.")
+        return
+
     embed = discord.Embed(
         title="Support",
         description="Select a category below to open a ticket.\nTickets auto-close in 30 minutes if no reply.",
