@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+from discord.ui import Button, View
 import asyncio
 import os
 
@@ -10,15 +11,26 @@ intents.members = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-STAFF_ROLE_ID = 1376861623834247168
-CATEGORY_ID = 1377221670837682261
-LOG_CHANNEL_ID = 1377208637029744641
-AUTO_CLOSE_TIME = 1800  # 30 minutes
+STAFF_ROLE_ID = 1376861623834247168  # Staff role ID
+TICKET_CATEGORY_ID = 1377221670837682261  # Category ID where tickets go
+LOG_CHANNEL_ID = 1377208637029744641  # Log channel ID
+AUTO_CLOSE_TIME = 1800  # 30 minutes in seconds
 
-@bot.event
-async def on_ready():
-    print(f'✅ Bot {bot.user} is ready!')
+active_tickets = {}
 
+# --- Payment Methods Message ---
+def get_payment_methods():
+    return (
+        "📌 **Please describe your issue or request.**\n"
+        "💸 **Payment Methods:**\n"
+        "• <:PayPal:137429079403548619> **PayPal (F&F)**\n"
+        "• <:PurpleCashApp:1374290682835107892> **Cash App**\n"
+        "• <:ApplePay:1374291211498120742> **Apple Pay**\n"
+        "• <:Zelle:1374291283229698194> **Zelle**\n"
+        "• <:Litecoin:1374291161166641234> **Litecoin (LTC)**"
+    )
+
+# --- Open Ticket Command ---
 @bot.command()
 @commands.has_permissions(manage_channels=True)
 async def setup(ctx):
@@ -27,134 +39,130 @@ async def setup(ctx):
         description="Select a category below to open a ticket.\nTickets auto-close in 30 minutes if no reply.",
         color=0x9b59b6
     )
-    view = discord.ui.View()
-    view.add_item(discord.ui.Button(label="Claims/Credits", emoji="<a:Gift:1368420677648121876>", custom_id="claims"))
-    view.add_item(discord.ui.Button(label="Server Boosts", emoji="<a:NitroBooster:1368420767577931836>", custom_id="boosts"))
-    view.add_item(discord.ui.Button(label="Premium Upgrades", emoji="<:upvote:1376850180644667462>", custom_id="premium"))
-    view.add_item(discord.ui.Button(label="Reseller", emoji="<a:moneywings:1377119310761427014>", custom_id="reseller"))
+    view = View()
+    view.add_item(Button(label="Claims/Credits", custom_id="claims", emoji="<:PayPal:137429079403548619>"))
+    view.add_item(Button(label="Server Boosts", custom_id="boosts", emoji="<:PurpleCashApp:1374290682835107892>"))
+    view.add_item(Button(label="Premium Upgrades", custom_id="premium", emoji="<:ApplePay:1374291211498120742>"))
+    view.add_item(Button(label="Reseller", custom_id="reseller", emoji="<:Litecoin:1374291161166641234>"))
     await ctx.send(embed=embed, view=view)
 
+# --- Handle Button Interaction ---
 @bot.event
 async def on_interaction(interaction):
-    if interaction.type == discord.InteractionType.component and interaction.data.get("custom_id") in ["claims", "boosts", "premium", "reseller"]:
-        category = interaction.data['custom_id']
-        guild = interaction.guild
-        user = interaction.user
+    if not interaction.data.get("custom_id"):
+        return
+    category = interaction.data["custom_id"]
+    user = interaction.user
 
-        category_channel = guild.get_channel(CATEGORY_ID)
-        if not category_channel:
-            await interaction.response.send_message("❌ Ticket category not found. Please check the configuration.", ephemeral=True)
-            return
+    # Check if user has a ticket in this category
+    key = (user.id, category)
+    if key in active_tickets:
+        await interaction.response.send_message("You already have an open ticket in this category.", ephemeral=True)
+        return
 
-        ticket_name = f"{category}-{user.name}".lower()
-        for channel in category_channel.text_channels:
-            if channel.name.startswith(f"{category}-{user.name}"):
-                await interaction.response.send_message(f"❌ You already have a ticket open: {channel.mention}", ephemeral=True)
-                return
+    # Create ticket
+    guild = interaction.guild
+    category_channel = guild.get_channel(TICKET_CATEGORY_ID)
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+        guild.get_role(STAFF_ROLE_ID): discord.PermissionOverwrite(view_channel=True, send_messages=True)
+    }
+    channel = await guild.create_text_channel(
+        name=f"{category}-{user.name}".replace(" ", "-"),
+        category=category_channel,
+        overwrites=overwrites
+    )
 
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_messages=True),
-            guild.get_role(STAFF_ROLE_ID): discord.PermissionOverwrite(view_channel=True, send_messages=True, read_messages=True)
-        }
+    active_tickets[key] = channel.id
 
-        channel = await category_channel.create_text_channel(ticket_name, overwrites=overwrites, topic=f"{user.id}")
+    # Log and send payment message
+    log_channel = guild.get_channel(LOG_CHANNEL_ID)
+    if log_channel:
+        await log_channel.send(f"📂 Ticket opened: {channel.mention} by {user.mention} (Category: {category})")
+    await channel.send(f"{user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist!\n\n{get_payment_methods()}")
 
-        await channel.send(
-            f"{user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist!\n\n"
-            "📌 Please describe your issue or request.\n"
-            "💸 Payment Methods:\n"
-            "• <:PayPal:137429079403548619> **PayPal (F&F)**\n"
-            "• <:PurpleCashApp:1374290682835107892> **Cash App**\n"
-            "• <:ApplePay:1374291211498120742> **Apple Pay**\n"
-            "• <:Zelle:1374291283229698194> **Zelle**\n"
-            "• <:Litecoin:1374291161166641234> **Litecoin (LTC)**"
-        )
+    # Auto-close timer
+    async def auto_close():
+        await asyncio.sleep(AUTO_CLOSE_TIME)
+        if channel and channel.id in [c.id for c in guild.text_channels]:
+            await channel.send("⏳ No response for 30 minutes. Closing ticket automatically.")
+            await channel.delete()
+            if log_channel:
+                await log_channel.send(f"✅ Ticket auto-closed: {channel.name}")
+            active_tickets.pop(key, None)
+    bot.loop.create_task(auto_close())
 
-        log_channel = bot.get_channel(LOG_CHANNEL_ID)
-        if log_channel:
-            await log_channel.send(f"📂 Ticket opened: {channel.mention} by {user.mention} (Category: {category})")
-
-        async def auto_close():
-            await asyncio.sleep(AUTO_CLOSE_TIME)
-            if channel and channel.category == category_channel:
-                await channel.send("⏰ No response received in 30 minutes. Closing the ticket.")
-                await channel.delete()
-
-        bot.loop.create_task(auto_close())
-
+# --- Ping Command ---
 @bot.command()
 async def ping(ctx):
-    if ctx.channel.category_id != CATEGORY_ID:
-        await ctx.send("This command can only be used in a ticket.")
-        return
-    try:
-        user_id = int(ctx.channel.topic)
-        user = ctx.guild.get_member(user_id)
-        if user:
-            await user.send(f"👋 Hey {user.mention}, please check your ticket for updates from the staff!")
-            await ctx.send(f"✅ DM sent to {user.mention}!")
+    if ctx.channel.category and ctx.channel.category.id == TICKET_CATEGORY_ID:
+        opener = ctx.channel.name.split('-')[-1]
+        member = discord.utils.get(ctx.guild.members, name=opener)
+        if member:
+            await member.send(f"📬 **You have a message in your ticket!**")
+            await ctx.send(f"✅ DM sent to {member.mention}")
         else:
-            await ctx.send("❌ Could not find the user who opened this ticket.")
-    except Exception:
-        await ctx.send("❌ Could not DM the ticket user. They may have DMs disabled.")
+            await ctx.send("❌ Could not find the ticket opener.")
+    else:
+        await ctx.send("This command can only be used in ticket channels.")
 
+# --- Close Command ---
 @bot.command()
 async def close(ctx):
-    if ctx.channel.category_id != CATEGORY_ID:
-        await ctx.send("This command can only be used in a ticket.")
-        return
+    if ctx.channel.category and ctx.channel.category.id == TICKET_CATEGORY_ID:
+        view = View()
+        async def confirm(interaction):
+            await ctx.channel.delete()
+            key = next((k for k, v in active_tickets.items() if v == ctx.channel.id), None)
+            if key:
+                active_tickets.pop(key, None)
+            log_channel = ctx.guild.get_channel(LOG_CHANNEL_ID)
+            if log_channel:
+                await log_channel.send(f"✅ Ticket manually closed: {ctx.channel.name}")
+        async def cancel(interaction):
+            await interaction.response.send_message("❌ Ticket closure cancelled.", ephemeral=True)
+        async def auto(interaction):
+            await interaction.response.send_message("⏳ Auto-closing in 30 seconds...")
+            await asyncio.sleep(30)
+            await ctx.channel.delete()
+            key = next((k for k, v in active_tickets.items() if v == ctx.channel.id), None)
+            if key:
+                active_tickets.pop(key, None)
+            log_channel = ctx.guild.get_channel(LOG_CHANNEL_ID)
+            if log_channel:
+                await log_channel.send(f"✅ Ticket auto-closed via !close: {ctx.channel.name}")
 
-    view = discord.ui.View()
-    async def confirm(interaction):
-        await interaction.response.edit_message(content="✅ Closing the ticket...", view=None)
-        await asyncio.sleep(2)
-        await ctx.channel.delete()
-        log_channel = bot.get_channel(LOG_CHANNEL_ID)
-        if log_channel:
-            await log_channel.send(f"✅ Ticket manually closed: {ctx.channel.name}")
+        view.add_item(Button(label="Yes", style=discord.ButtonStyle.green, custom_id="yes"))
+        view.add_item(Button(label="No", style=discord.ButtonStyle.red, custom_id="no"))
+        view.add_item(Button(label="Auto", style=discord.ButtonStyle.gray, custom_id="auto"))
 
-    async def cancel(interaction):
-        await interaction.response.edit_message(content="❌ Ticket close cancelled.", view=None)
+        async def handle(interaction):
+            if interaction.data["custom_id"] == "yes":
+                await confirm(interaction)
+            elif interaction.data["custom_id"] == "no":
+                await cancel(interaction)
+            elif interaction.data["custom_id"] == "auto":
+                await auto(interaction)
 
-    async def auto(interaction):
-        await interaction.response.edit_message(content="Auto-closing the ticket in 30 seconds.", view=None)
-        await asyncio.sleep(30)
-        await ctx.channel.delete()
-        log_channel = bot.get_channel(LOG_CHANNEL_ID)
-        if log_channel:
-            await log_channel.send(f"✅ Ticket auto-closed: {ctx.channel.name}")
+        view.on_timeout = lambda: None
+        view.on_click = handle
+        await ctx.send("Are you sure you want to close the ticket?", view=view)
+    else:
+        await ctx.send("This command can only be used in ticket channels.")
 
-    view.add_item(discord.ui.Button(label="Yes", style=discord.ButtonStyle.green, custom_id="yes"))
-    view.add_item(discord.ui.Button(label="No", style=discord.ButtonStyle.red, custom_id="no"))
-    view.add_item(discord.ui.Button(label="Auto (30 sec)", style=discord.ButtonStyle.blurple, custom_id="auto"))
-
-    message = await ctx.send("Are you sure you want to close this ticket?", view=view)
-
-    def check(i):
-        return i.user == ctx.author and i.message.id == message.id
-
-    try:
-        interaction = await bot.wait_for("interaction", check=check, timeout=60)
-        if interaction.data['custom_id'] == 'yes':
-            await confirm(interaction)
-        elif interaction.data['custom_id'] == 'no':
-            await cancel(interaction)
-        elif interaction.data['custom_id'] == 'auto':
-            await auto(interaction)
-    except asyncio.TimeoutError:
-        await message.edit(content="❌ Timeout. No action taken.", view=None)
-
+# --- Payment Commands ---
 @bot.command()
-async def pp(ctx):
-    await ctx.send("Here is the PayPal link: https://www.paypal.com/paypalme/Hunter393?country.x=US&locale.x=en_US")
+async def ltc(ctx):
+    await ctx.send("💸 **Litecoin (LTC)** Address: `LeYqdR1y6EEASgV2Uf5oc1ABkeAHaMmjXx`")
 
 @bot.command()
 async def cash(ctx):
-    await ctx.send("Here is the Cash App link: https://cash.app/$Tripussy")
+    await ctx.send("💸 **Cash App**: https://cash.app/$Tripussy")
 
 @bot.command()
-async def ltc(ctx):
-    await ctx.send("Here is the Litecoin (LTC) address: LeYqdR1y6EEASgV2Uf5oc1ABkeAHaMmjXx")
+async def pp(ctx):
+    await ctx.send("💸 **PayPal**: https://www.paypal.com/paypalme/Hunter393?country.x=US&locale.x=en_US")
 
-bot.run(os.getenv("YOUR_BOT_TOKEN"))
+# --- Run Bot ---
+bot.run(os.getenv("DISCORD_TOKEN"))
