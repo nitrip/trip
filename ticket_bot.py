@@ -1,141 +1,81 @@
 import discord
 from discord.ext import commands
 import asyncio
-from discord import ui
+import os
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.guilds = True
-intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-LOG_CHANNEL_ID = 1377208637029744641
-STAFF_ROLE_ID = 1376861623834247168
-OWNER_ROLE_ID = 1368395196131442849
-
-CATEGORY_NAMES = {
-    "claims": "<a:Gift:1368420677648121876> Claims",
-    "boosts": "<a:NitroBooster:1368420767577931836> Boosts",
-    "premium": "<:upvote:1376850180644667462> Premium",
-    "reseller": "<a:moneywings:1377119310761427014> Reseller"
-}
+STAFF_ROLE_ID = 1376861623834247168  # Staff role ID
+LOG_CHANNEL_ID = 1377208637029744641  # Ticket logs channel ID
 
 @bot.event
 async def on_ready():
-    print(f"{bot.user} is ready!")
+    print(f'Bot {bot.user} is ready!')
 
 @bot.command()
 @commands.has_permissions(manage_channels=True)
-async def setup_ticket(ctx):
-    embed = discord.Embed(title="Support", description="Select a category to open a ticket.", color=0x9b59b6)
-    view = ui.View()
-    for custom_id, label in CATEGORY_NAMES.items():
-        view.add_item(discord.ui.Button(label=label, custom_id=custom_id))
+async def setup(ctx):
+    embed = discord.Embed(title="Support", description="Select a category below to open a ticket.\nTickets will auto-close in 30 minutes if no reply.", color=0x9b59b6)
+    view = discord.ui.View()
+
+    view.add_item(discord.ui.Button(label="Claims/Credits", emoji="<a:Gift:1368420677648121876>", custom_id="claims"))
+    view.add_item(discord.ui.Button(label="Server Boosts", emoji="<a:NitroBooster:1368420767577931836>", custom_id="boosts"))
+    view.add_item(discord.ui.Button(label="Premium Upgrades", emoji="<:upvote:1376850180644667462>", custom_id="premium"))
+    view.add_item(discord.ui.Button(label="Reseller", emoji="<a:moneywings:1377119310761427014>", custom_id="reseller"))
+
     await ctx.send(embed=embed, view=view)
 
 @bot.event
 async def on_interaction(interaction):
-    if interaction.type == discord.InteractionType.component and interaction.data['custom_id'] in CATEGORY_NAMES:
-        category_id = interaction.data['custom_id']
-        category_label = CATEGORY_NAMES[category_id]
+    if interaction.type == discord.InteractionType.component:
+        category = interaction.data['custom_id']
         guild = interaction.guild
+        category_name = f"📂 {category}-{interaction.user.name}"
 
-        ticket_category = discord.utils.get(guild.categories, name="Tickets")
-        if ticket_category is None:
-            ticket_category = await guild.create_category("Tickets")
+        # Check for existing ticket
+        for channel in guild.text_channels:
+            if channel.name.startswith(f"{category}-{interaction.user.name}"):
+                await interaction.response.send_message("You already have a ticket open in this category!", ephemeral=True)
+                return
 
-        existing = discord.utils.get(ticket_category.channels, name=f"{category_id}-{interaction.user.name}".lower())
-        if existing:
-            await interaction.response.send_message(f"You already have an open ticket in '{category_label}'.", ephemeral=True)
-            return
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+            guild.get_role(1376861623834247168): discord.PermissionOverwrite(view_channel=True, send_messages=True),
+            guild.get_role(1368395196131442849): discord.PermissionOverwrite(view_channel=True, send_messages=True)
+        }
 
-        channel = await ticket_category.create_text_channel(f"{category_id}-{interaction.user.name}".lower())
-        await channel.set_permissions(guild.default_role, read_messages=False, send_messages=False)
-        await channel.set_permissions(interaction.user, read_messages=True, send_messages=True)
-        await channel.set_permissions(guild.get_role(OWNER_ROLE_ID), read_messages=True, send_messages=True)
-        await channel.set_permissions(guild.get_role(STAFF_ROLE_ID), read_messages=True, send_messages=True)
+        ticket_channel = await guild.create_text_channel(category_name, overwrites=overwrites, topic=f"Ticket for {interaction.user}")
 
-        await channel.edit(topic=str(interaction.user.id))
-
-        await channel.send(
-            f"{interaction.user.mention} has opened a ticket. <@&" + str(STAFF_ROLE_ID) + ">, please assist!\n\nPlease describe your issue in detail. Abusing the ticket system (alts/fake accounts) will result in a blacklist."
+        await ticket_channel.send(
+            f"{interaction.user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist!\n"
+            f"📌 Please describe your issue or the service you're requesting.\n"
+            f"💸 Payment Methods:\n- <a:Gift:1368420677648121876> Cash App\n- <:upvote:1376850180644667462> Apple Pay\n- <a:NitroBooster:1368420767577931836> Zelle\n- <a:moneywings:1377119310761427014> Litecoin"
         )
 
         log_channel = bot.get_channel(LOG_CHANNEL_ID)
         if log_channel:
-            await log_channel.send(f"📂 Ticket opened: {channel.mention} by {interaction.user.mention} (Category: {category_label})")
+            await log_channel.send(f"✅ Ticket opened: {ticket_channel.mention} by {interaction.user.mention} (Category: {category})")
 
-        await interaction.response.send_message(f"Your ticket has been created: {channel.mention}", ephemeral=True)
+        await interaction.response.send_message(f"✅ Your ticket has been created: {ticket_channel.mention}", ephemeral=True)
 
 @bot.command()
 @commands.has_permissions(manage_channels=True)
 async def ping(ctx):
-    if ctx.channel.category and ctx.channel.category.name == "Tickets":
-        try:
-            user_id = int(ctx.channel.topic)
-            user = await bot.fetch_user(user_id)
-            await user.send(f"Hey {user.name}, please check your ticket in {ctx.channel.mention}!")
-            await ctx.send(f"✅ DM sent to {user.mention}!", delete_after=5)
-        except Exception:
-            await ctx.send("❌ Could not DM the ticket creator. They may have DMs disabled.", delete_after=5)
+    if ctx.channel.topic:
+        user_id = int(ctx.channel.topic.split()[-1])
+        user = ctx.guild.get_member(user_id)
+        if user:
+            try:
+                await user.send(f"👋 Hi {user.name}, please check your ticket for updates or questions from the staff.")
+                await ctx.send("✅ DM sent to the ticket user.")
+            except discord.Forbidden:
+                await ctx.send("❌ Could not send a DM. Please make sure the user has DMs open.")
+        else:
+            await ctx.send("❌ Could not find the user who opened this ticket.")
     else:
-        await ctx.send("This command can only be used in ticket channels.")
+        await ctx.send("❌ This channel is not a ticket.")
 
-@bot.command()
-@commands.has_permissions(manage_channels=True)
-async def close(ctx):
-    if ctx.channel.category and ctx.channel.category.name == "Tickets":
-        class ConfirmView(ui.View):
-            def __init__(self):
-                super().__init__(timeout=30)
-                self.auto_task = None
-
-            @ui.button(label="Yes", style=discord.ButtonStyle.danger)
-            async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
-                if self.auto_task and not self.auto_task.done():
-                    self.auto_task.cancel()
-                await interaction.response.edit_message(content="Closing the ticket...", view=None)
-                await asyncio.sleep(2)
-                await ctx.channel.delete()
-                log_channel = bot.get_channel(LOG_CHANNEL_ID)
-                if log_channel:
-                    await log_channel.send(f"✅ Ticket manually closed: {ctx.channel.name}")
-
-            @ui.button(label="No", style=discord.ButtonStyle.secondary)
-            async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
-                if self.auto_task and not self.auto_task.done():
-                    self.auto_task.cancel()
-                await interaction.response.edit_message(content="Ticket close cancelled.", view=None)
-                self.stop()
-
-            @ui.button(label="Auto (30 sec)", style=discord.ButtonStyle.primary)
-            async def auto(self, interaction: discord.Interaction, button: discord.ui.Button):
-                await interaction.response.edit_message(content="Auto-close initiated. Ticket will close in 30 seconds.", view=None)
-                self.auto_task = asyncio.create_task(self.auto_close(ctx.channel))
-
-            async def auto_close(self, channel):
-                await asyncio.sleep(30)
-                try:
-                    await channel.delete()
-                    log_channel = bot.get_channel(LOG_CHANNEL_ID)
-                    if log_channel:
-                        await log_channel.send(f"✅ Ticket auto-closed: {channel.name}")
-                except Exception:
-                    pass
-
-        view = ConfirmView()
-        await ctx.send("Are you sure you want to close this ticket?", view=view)
-    else:
-        await ctx.send("This command can only be used in ticket channels.")
-
-@bot.command()
-@commands.has_permissions(manage_channels=True)
-async def add(ctx, member: discord.Member):
-    if ctx.channel.category and ctx.channel.category.name == "Tickets":
-        await ctx.channel.set_permissions(member, read_messages=True, send_messages=True)
-        await ctx.send(f"✅ {member.mention} has been added to this ticket.")
-    else:
-        await ctx.send("❌ This command can only be used in ticket channels.")
-
-import os
 bot.run(os.getenv("YOUR_BOT_TOKEN"))
