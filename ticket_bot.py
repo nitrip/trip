@@ -17,14 +17,13 @@ AUTO_CLOSE_TIME = 1800  # 30 minutes
 ticket_timers = {}
 TICKET_CREATOR = {}
 
-# --- MODIFIED: Integrated emoji IDs directly into CATEGORIES_DATA ---
 CATEGORIES_DATA = {
     "claims": {"label": "Claims/Credits", "emoji_id": "<a:Gift:1368420677648121876>"},
     "boosts": {"label": "Server Boosts", "emoji_id": "<a:NitroBooster:1368420767577931836>"},
     "premium": {"label": "Premium Upgrades", "emoji_id": "<:upvote:1376850180644667462>"},
     "reseller": {"label": "Reseller", "emoji_id": "<a:moneywings:1377119310761427014>"}
 }
-# --- IMPORTANT: If you want to create tickets in a specific category by ID, define it here:
+# IMPORTANT: If you want to create tickets in a specific category by ID, define it here:
 # TICKET_PARENT_CATEGORY_ID = YOUR_TICKET_CATEGORY_ID # e.g., 1234567890123456789
 # If you prefer to find it by name as in your original script ("Tickets"), the code below will handle it.
 
@@ -32,7 +31,6 @@ CATEGORIES_DATA = {
 async def on_ready():
     print(f'Bot {bot.user} is ready!')
 
-# --- ADDED: Global Error Handler ---
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
@@ -263,18 +261,30 @@ async def ping(ctx):
     if ctx.channel.id in TICKET_CREATOR:
         user_id = TICKET_CREATOR[ctx.channel.id]
         user = ctx.guild.get_member(user_id)
+        
+        # If user is not found in cache, try fetching them
+        if user is None:
+            try:
+                user = await bot.fetch_user(user_id)
+            except discord.NotFound:
+                await ctx.send("❌ The ticket creator could not be found.")
+                return
+            except Exception as e:
+                await ctx.send(f"❌ An error occurred while trying to fetch the user: {e}")
+                return
+
         if user:
             try:
                 await user.send(f"👋 {ctx.author.mention} asked you to check your ticket in {ctx.channel.mention}. Please review your ticket channel.")
-                await ctx.send("✅ DM sent to the ticket creator to check the ticket!")
+                await ctx.send("✅ DM sent to the ticket creator!")
             except discord.Forbidden:
                 await ctx.send("❌ I couldn't DM the user. They might have DMs disabled or blocked me.")
             except Exception as e:
                 await ctx.send(f"❌ An error occurred while trying to DM the user: {e}")
         else:
-            await ctx.send("❌ The ticket creator could not be found in this server.")
+            await ctx.send("❌ The ticket creator could not be found.")
     else:
-        await ctx.send("❌ No ticket creator data found for this channel.")
+        await ctx.send("❌ No ticket creator data found for this channel. This command must be used in a ticket channel.")
 
 @bot.command()
 async def pp(ctx):
