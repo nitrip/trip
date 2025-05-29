@@ -53,7 +53,7 @@ async def on_interaction(interaction):
             ticket_category = await guild.create_category("Tickets")
 
         channel_name = f"{category_id}-{interaction.user.name}".replace(" ", "-").lower()
-        channel = await ticket_category.create_text_channel(channel_name, topic=str(interaction.user.id))
+        channel = await ticket_category.create_text_channel(channel_name, topic=str(interaction.user.id))  # 🛠️ Set user ID in topic
 
         await channel.set_permissions(guild.default_role, read_messages=False, send_messages=False)
         await channel.set_permissions(interaction.user, read_messages=True, send_messages=True)
@@ -141,33 +141,6 @@ async def add(ctx, member: discord.Member):
         await ctx.send(f"✅ {member.mention} has been added to this ticket.")
     else:
         await ctx.send("❌ This command can only be used in ticket channels.")
-
-@bot.command()
-@commands.has_permissions(manage_channels=True)
-async def reopen(ctx, user: discord.Member, category: str):
-    category = category.lower()
-    if category not in CATEGORIES:
-        await ctx.send(f"Invalid category. Choose from: {', '.join(CATEGORIES.keys())}")
-        return
-
-    guild = ctx.guild
-    ticket_category = discord.utils.get(guild.categories, name="Tickets")
-    if ticket_category is None:
-        ticket_category = await guild.create_category("Tickets")
-
-    channel_name = f"{category}-{user.name}".replace(" ", "-").lower()
-    channel = await ticket_category.create_text_channel(channel_name, topic=str(user.id))
-    await channel.set_permissions(guild.default_role, read_messages=False, send_messages=False)
-    await channel.set_permissions(user, read_messages=True, send_messages=True)
-    await channel.set_permissions(guild.get_role(OWNER_ROLE_ID), read_messages=True, send_messages=True)
-    await channel.set_permissions(guild.get_role(STAFF_ROLE_ID), read_messages=True, send_messages=True)
-
-    await channel.send(f"Ticket reopened for {user.mention}. <@&{STAFF_ROLE_ID}>, please assist! 🛠️")
-    log_channel = bot.get_channel(LOG_CHANNEL_ID)
-    if log_channel:
-        await log_channel.send(f"🔄 Ticket reopened for {user.mention} in {channel.mention} (Category: {CATEGORIES[category]})")
-
-    await ctx.send(f"Reopened a ticket for {user.mention} in {channel.mention}.")
 
 @bot.command()
 @commands.has_permissions(manage_channels=True)
