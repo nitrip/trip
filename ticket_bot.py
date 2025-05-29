@@ -12,7 +12,6 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 LOG_CHANNEL_ID = 1377208637029744641
 STAFF_ROLE_ID = 1376861623834247168
 OWNER_ROLE_ID = 1368395196131442849
-ticket_timers = {}
 
 CATEGORY_NAMES = {
     "claims": "<a:Gift:1368420677648121876> Claims",
@@ -59,9 +58,7 @@ async def on_interaction(interaction):
         await channel.edit(topic=str(interaction.user.id))
 
         await channel.send(
-            f"{interaction.user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist!
-
-Please describe your issue in detail. Abusing the ticket system (alts/fake accounts) will result in a blacklist."
+            f"{interaction.user.mention} has opened a ticket. <@&" + str(STAFF_ROLE_ID) + ">, please assist!\n\nPlease describe your issue in detail. Abusing the ticket system (alts/fake accounts) will result in a blacklist."
         )
 
         log_channel = bot.get_channel(LOG_CHANNEL_ID)
@@ -91,9 +88,12 @@ async def close(ctx):
         class ConfirmView(ui.View):
             def __init__(self):
                 super().__init__(timeout=30)
+                self.auto_task = None
 
             @ui.button(label="Yes", style=discord.ButtonStyle.danger)
             async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+                if self.auto_task and not self.auto_task.done():
+                    self.auto_task.cancel()
                 await interaction.response.edit_message(content="Closing the ticket...", view=None)
                 await asyncio.sleep(2)
                 await ctx.channel.delete()
@@ -103,18 +103,23 @@ async def close(ctx):
 
             @ui.button(label="No", style=discord.ButtonStyle.secondary)
             async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
+                if self.auto_task and not self.auto_task.done():
+                    self.auto_task.cancel()
                 await interaction.response.edit_message(content="Ticket close cancelled.", view=None)
                 self.stop()
 
             @ui.button(label="Auto (30 sec)", style=discord.ButtonStyle.primary)
             async def auto(self, interaction: discord.Interaction, button: discord.ui.Button):
                 await interaction.response.edit_message(content="Auto-close initiated. Ticket will close in 30 seconds.", view=None)
+                self.auto_task = asyncio.create_task(self.auto_close(ctx.channel))
+
+            async def auto_close(self, channel):
                 await asyncio.sleep(30)
                 try:
-                    await ctx.channel.delete()
+                    await channel.delete()
                     log_channel = bot.get_channel(LOG_CHANNEL_ID)
                     if log_channel:
-                        await log_channel.send(f"✅ Ticket auto-closed: {ctx.channel.name}")
+                        await log_channel.send(f"✅ Ticket auto-closed: {channel.name}")
                 except Exception:
                     pass
 
@@ -132,4 +137,5 @@ async def add(ctx, member: discord.Member):
     else:
         await ctx.send("❌ This command can only be used in ticket channels.")
 
+import os
 bot.run(os.getenv("YOUR_BOT_TOKEN"))
