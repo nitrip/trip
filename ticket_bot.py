@@ -25,11 +25,12 @@ TICKET_DATA_FILE = 'ticket_data.json'
 TICKET_CREATOR = {}
 ticket_timers = {} # Still in-memory for active tasks
 
+# Define your categories with labels, emojis, and now, BUTTON STYLES!
 CATEGORIES_DATA = {
-    "claims": {"label": "Claims/Credits", "emoji_id": "<a:Gift:1368420677648121876>"},
-    "boosts": {"label": "Server Boosts", "emoji_id": "<a:NitroBooster:1368420767577931836>"},
-    "premium": {"label": "Premium Upgrades", "emoji_id": "<:upvote:1376850180644667462>"},
-    "reseller": {"label": "Reseller", "emoji_id": "<a:moneywings:1377119310761427014>"}
+    "claims": {"label": "Claims/Credits", "emoji_id": "<a:Gift:1368420677648121876>", "style": discord.ButtonStyle.success}, # Green for claims/credits
+    "boosts": {"label": "Server Boosts", "emoji_id": "<a:NitroBooster:1368420767577931836>", "style": discord.ButtonStyle.primary}, # Blurple for boosts
+    "premium": {"label": "Premium Upgrades", "emoji_id": "<:upvote:1376850180644667462>", "style": discord.ButtonStyle.secondary}, # Grey for premium
+    "reseller": {"label": "Reseller", "emoji_id": "<a:moneywings:1377119310761427014>", "style": discord.ButtonStyle.danger} # Red for reseller (can be adjusted)
 }
 
 # IMPORTANT: If you want to create tickets in a specific category by ID, define it here:
@@ -120,7 +121,8 @@ async def setup(ctx):
         button = discord.ui.Button(
             label=data["label"],
             custom_id=custom_id,
-            emoji=data["emoji_id"]
+            emoji=data["emoji_id"],
+            style=data["style"] # <<< THIS IS THE KEY CHANGE HERE: Adding the style!
         )
         view.add_item(button)
 
@@ -238,9 +240,11 @@ async def on_interaction(interaction):
             close_button = discord.ui.Button(label="Close Ticket", style=discord.ButtonStyle.red, custom_id="close_ticket_button", emoji="🔒")
             
             async def close_callback(interaction: discord.Interaction):
-                # Only the ticket creator or staff/owner can click this button
-                if interaction.user.id == TICKET_CREATOR.get(interaction.channel.id) or \
-                   guild.get_member(interaction.user.id).top_role.id in [STAFF_ROLE_ID, OWNER_ROLE_ID]: # Simplified role check for demonstration
+                # Check if the user interacting with the button is the ticket creator, staff, or owner
+                is_staff_or_owner = guild.get_member(interaction.user.id).top_role.id in [STAFF_ROLE_ID, OWNER_ROLE_ID]
+                is_ticket_creator_user = TICKET_CREATOR.get(interaction.channel.id) == interaction.user.id
+
+                if is_ticket_creator_user or is_staff_or_owner:
                     # Check if the interaction is from the correct channel
                     if interaction.channel.id == channel.id:
                         await interaction.response.send_message("Are you sure you want to close this ticket? Click the confirmation button below.", ephemeral=True)
@@ -317,13 +321,21 @@ async def auto_close_ticket(channel_id, guild_id):
 
         channel = guild.get_channel(channel_id)
         if channel:
-            messages = [msg async for msg in channel.history(limit=2, oldest_first=False)] # Check only last 2 messages (to exclude initial message)
-            if len(messages) == 1 and messages[0].author == bot.user: # Only the bot's initial message
+            # Check for activity (messages not just from the bot)
+            # Fetch latest messages to see if there's user activity
+            messages = []
+            async for msg in channel.history(limit=5, oldest_first=False): # Check last 5 messages
+                messages.append(msg)
+            
+            # Filter out messages sent by the bot itself
+            user_messages = [msg for msg in messages if msg.author != bot.user]
+
+            if not user_messages: # If no user messages were found among the last 5
                 ticket_creator_id = TICKET_CREATOR.pop(channel.id, "Unknown") # Pop before deleting
                 save_ticket_data() # Save data after deletion
                 ticket_creator_mention = f"<@{ticket_creator_id}>" if ticket_creator_id != "Unknown" else "Unknown User"
 
-                close_reason = "No activity for 30 minutes (auto-closed)."
+                close_reason = f"No activity for {AUTO_CLOSE_TIME // 60} minutes (auto-closed)."
                 
                 # Create transcript before deleting
                 await create_transcript(channel, bot.user, auto_closed=True)
@@ -342,7 +354,7 @@ async def auto_close_ticket(channel_id, guild_id):
                     await log_channel.send(f"❌ Ticket `{channel.name}` (ID: {channel_id}) created by {ticket_creator_mention} has been **auto-closed** due to inactivity.")
                 print(f"Auto-closed ticket: {channel.name} ({channel_id})")
             else:
-                # If there's activity, reset the timer
+                # If there's activity, reset the timer by re-scheduling
                 print(f"Ticket {channel.name} has activity, resetting auto-close timer.")
                 task = asyncio.create_task(auto_close_ticket(channel.id, guild.id))
                 ticket_timers[channel.id] = task # Update the timer task
@@ -472,7 +484,11 @@ async def add(ctx, member: discord.Member):
 async def remove(ctx, member: discord.Member):
     if ctx.channel.category and ctx.channel.category.name == "Tickets":
         # Prevent removing staff/owner or the ticket creator from the ticket
-        if member.id == STAFF_ROLE_ID or member.id == OWNER_ROLE_ID or member.id == TICKET_CREATOR.get(ctx.channel.id):
+        # Get actual member objects for roles to compare properly
+        member_is_staff = any(role.id == STAFF_ROLE_ID for role in member.roles)
+        member_is_owner = any(role.id == OWNER_ROLE_ID for role in member.roles)
+
+        if member_is_staff or member_is_owner or TICKET_CREATOR.get(ctx.channel.id) == member.id:
             await ctx.send("❌ You cannot remove a staff member, owner, or the original ticket creator from the ticket using this command.")
             return
 
@@ -506,7 +522,14 @@ async def create_transcript(channel, closer, auto_closed=False):
 
     transcript_content = []
     transcript_content.append(f"--- Ticket Transcript for #{channel.name} (ID: {channel.id}) ---")
-    transcript_content.append(f"Opened by: <@{TICKET_CREATOR.get(channel.id, 'Unknown User ID')}>")
+    ticket_creator_id = TICKET_CREATOR.get(channel.id)
+    if ticket_creator_id:
+        creator_member = channel.guild.get_member(ticket_creator_id)
+        creator_name = creator_member.display_name if creator_member else f"Unknown User (ID: {ticket_creator_id})"
+        transcript_content.append(f"Opened by: {creator_name} (ID: {ticket_creator_id})")
+    else:
+        transcript_content.append(f"Opened by: Unknown User (ID not found in TICKET_CREATOR)")
+
     transcript_content.append(f"Closed by: {closer.name} (ID: {closer.id})")
     transcript_content.append(f"Timestamp: {discord.utils.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}\n")
 
@@ -515,7 +538,13 @@ async def create_transcript(channel, closer, auto_closed=False):
         async for msg in channel.history(limit=None, oldest_first=True):
             # Format message for readability
             attachments = "\n".join([f"Attachment: {att.url}" for att in msg.attachments])
-            embeds = "\n".join([f"Embed URL: {embed.url if embed.url else 'No URL'}" for embed in msg.embeds])
+            embed_info = []
+            for embed in msg.embeds:
+                embed_title = f"Title: {embed.title}" if embed.title else "No Title"
+                embed_description = f"Description: {embed.description}" if embed.description else "No Description"
+                embed_url = f"URL: {embed.url}" if embed.url else "No URL"
+                embed_info.append(f"Embed: ({embed_title}, {embed_description}, {embed_url})")
+            embeds = "\n".join(embed_info)
             
             content = f"[{msg.created_at.strftime('%Y-%m-%d %H:%M:%S')}] {msg.author.display_name} ({msg.author.id}): {msg.clean_content}"
             if attachments:
@@ -530,8 +559,8 @@ async def create_transcript(channel, closer, auto_closed=False):
 
         # Send the transcript to the log channel
         file = discord.File(transcript_filename)
-        ticket_creator_id = TICKET_CREATOR.get(channel.id, "Unknown")
-        ticket_creator_mention = f"<@{ticket_creator_id}>" if ticket_creator_id != "Unknown" else "Unknown User"
+        
+        ticket_creator_mention = f"<@{ticket_creator_id}>" if ticket_creator_id else "Unknown User"
         
         embed = discord.Embed(
             title=f"Ticket Transcript: #{channel.name}",
