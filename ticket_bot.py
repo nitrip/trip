@@ -320,8 +320,8 @@ async def on_interaction(interaction):
             await interaction.response.send_message(f"✅ Your ticket has been opened: {channel.mention}", ephemeral=True)
         else:
             await interaction.response.send_message(f"❌ {error_message}", ephemeral=True)
-    else:
-        await bot.process_commands(interaction)
+    # Removed the else: await bot.process_commands(interaction) block, as it caused AttributeError.
+    # Commands from messages are handled automatically, and interactions are handled by this event.
 
 # --- New Ticket Command ---
 @bot.command()
