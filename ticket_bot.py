@@ -107,7 +107,7 @@ async def create_new_ticket(guild: discord.Guild, user: discord.Member, category
             return None, f"An error occurred creating the ticket category: {e}"
 
     # Create ticket channel
-    channel_name_base = f"{category_id_key}-{user.name}".replace(" ", "-").lower()
+    channel_name_base = f"{category_id_key}-{user.display_name}".replace(" ", "-").lower()
     channel_name = channel_name_base
     counter = 0
     while discord.utils.get(ticket_category.channels, name=channel_name):
@@ -176,13 +176,14 @@ async def create_new_ticket(guild: discord.Guild, user: discord.Member, category
 
                         if log_channel:
                             embed = discord.Embed(
-                                title="✅ Ticket Manually Closed",
-                                description=f"Ticket `{channel.name}` (ID: `{channel.id}`) has been manually closed.",
+                                title="✅ Ticket Closed",
+                                description=f"Ticket `{channel.name}` has been closed.",
                                 color=discord.Color.green()
                             )
                             embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
                             embed.add_field(name="Closed By", value=interaction.user.mention, inline=True)
                             embed.add_field(name="Closure Method", value="Button Interaction", inline=True)
+                            embed.add_field(name="Closed By User ID", value=interaction.user.id, inline=False) # Added User ID
                             await log_channel.send(embed=embed)
                         print(f"Manually closed ticket: {channel.name} ({channel.id}) by button interaction.")
                     elif confirm_view.value is False:
@@ -390,11 +391,12 @@ async def auto_close_ticket(channel_id, guild_id):
                 if log_channel:
                     embed = discord.Embed(
                         title="❌ Ticket Auto-Closed",
-                        description=f"Ticket `{channel.name}` (ID: `{channel.id}`) has been auto-closed due to inactivity.",
+                        description=f"Ticket `{channel.name}` has been auto-closed due to inactivity.",
                         color=discord.Color.red()
                     )
                     embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
                     embed.add_field(name="Reason", value=close_reason, inline=False)
+                    embed.add_field(name="Ticket Creator User ID", value=ticket_creator_id_val, inline=False) # Added User ID
                     await log_channel.send(embed=embed)
                 print(f"Auto-closed ticket: {channel.name} ({channel.id})")
             else:
@@ -454,7 +456,7 @@ class ConfirmView(discord.ui.View):
 # --- Close Command ---
 @bot.command()
 @commands.has_permissions(manage_channels=True)
-async def close(ctx, *, reason: str = "No reason provided."):
+async def close(ctx):
     """Closes the current ticket channel."""
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
     if ctx.channel.category and ctx.channel.category.name == "Tickets":
@@ -467,7 +469,7 @@ async def close(ctx, *, reason: str = "No reason provided."):
             await ctx.send("❌ You do not have permission to close this ticket.")
             return
 
-        original_message_sent = await ctx.send(f"Are you sure you want to close this ticket? (Reason: {reason})")
+        original_message_sent = await ctx.send(f"Are you sure you want to close this ticket?")
         view = ConfirmView(ctx.author.id)
         await original_message_sent.edit(view=view)
         await view.wait()
@@ -483,17 +485,17 @@ async def close(ctx, *, reason: str = "No reason provided."):
 
             await create_transcript(ctx.channel, ctx.author)
             await asyncio.sleep(1)
-            await ctx.channel.delete(reason=f"Ticket closed by {ctx.author.name} ({reason})")
+            await ctx.channel.delete(reason=f"Ticket closed by {ctx.author.name}")
 
             if log_channel:
                 embed = discord.Embed(
-                    title="✅ Ticket Manually Closed",
-                    description=f"Ticket `{ctx.channel.name}` (ID: `{ctx.channel.id}`) has been manually closed.",
+                    title="✅ Ticket Closed",
+                    description=f"Ticket `{ctx.channel.name}` has been closed.",
                     color=discord.Color.green()
                 )
                 embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
                 embed.add_field(name="Closed By", value=ctx.author.mention, inline=True)
-                embed.add_field(name="Reason", value=reason, inline=False)
+                embed.add_field(name="Closed By User ID", value=ctx.author.id, inline=False) # Added User ID
                 await log_channel.send(embed=embed)
             print(f"Manually closed ticket: {ctx.channel.name} ({ctx.channel.id}) by {ctx.author.name}")
         elif view.value is False:
@@ -636,7 +638,7 @@ async def create_transcript(channel, closer, auto_closed=False):
         print(f"Error creating or sending transcript for {channel.name}: {e}", file=sys.stderr)
         traceback.print_exc()
 
-# --- Ping Command ---
+# --- Ping Ticket Creator Command ---
 @bot.command()
 @commands.has_permissions(manage_channels=True)
 async def ping(ctx):
@@ -667,6 +669,33 @@ async def ping(ctx):
             await ctx.send("❌ The ticket creator could not be found.")
     else:
         await ctx.send("❌ No ticket creator data found for this channel. This command must be used in a ticket channel.")
+
+# --- New General Ping Command ---
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def ticketping(ctx, member: discord.Member):
+    """Pings a specified member regarding the current ticket channel.
+    The user will receive a DM and a message in the ticket channel.
+    Usage: !ticketping <@user_mention>
+    """
+    if not ctx.channel.category or ctx.channel.category.name != "Tickets":
+        await ctx.send("❌ This command can only be used in ticket channels.")
+        return
+
+    try:
+        # DM the user
+        await member.send(
+            f"👋 {ctx.author.mention} from **{ctx.guild.name}** asked you to check the ticket "
+            f"{ctx.channel.mention}. Please review the ticket channel."
+        )
+        # Confirm in the ticket channel
+        await ctx.send(f"✅ DM sent to {member.mention} regarding this ticket!")
+    except discord.Forbidden:
+        await ctx.send(f"❌ I couldn't DM {member.mention}. They might have DMs disabled or blocked me.")
+    except Exception as e:
+        await ctx.send(f"❌ An error occurred while trying to ping {member.mention}: {e}")
+        print(f"Error pinging user {member.id} in ticket {ctx.channel.id}: {e}", file=sys.stderr)
+        traceback.print_exc()
 
 # --- Payment Commands ---
 @bot.command()
