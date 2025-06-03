@@ -152,7 +152,9 @@ async def create_new_ticket(guild: discord.Guild, user: discord.Member, category
         close_button = discord.ui.Button(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id="close_ticket_button", emoji="🔒")
 
         async def close_callback(interaction: discord.Interaction):
-            is_staff_or_owner = interaction.guild.get_member(interaction.user.id).top_role.id in [STAFF_ROLE_ID, OWNER_ROLE_ID]
+            # FIXED: Check if user has any of the required roles, not just top role
+            member = interaction.guild.get_member(interaction.user.id)
+            is_staff_or_owner = any(role.id in [STAFF_ROLE_ID, OWNER_ROLE_ID] for role in member.roles)
             is_ticket_creator_user = TICKET_CREATOR.get(interaction.channel.id) == interaction.user.id
 
             if is_ticket_creator_user or is_staff_or_owner:
@@ -183,7 +185,7 @@ async def create_new_ticket(guild: discord.Guild, user: discord.Member, category
                             embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
                             embed.add_field(name="Closed By", value=interaction.user.mention, inline=True)
                             embed.add_field(name="Closure Method", value="Button Interaction", inline=True)
-                            embed.add_field(name="Closed By User ID", value=interaction.user.id, inline=False) # Added User ID
+                            embed.add_field(name="Closed By User ID", value=interaction.user.id, inline=False)
                             await log_channel.send(embed=embed)
                         print(f"Manually closed ticket: {channel.name} ({channel.id}) by button interaction.")
                     elif confirm_view.value is False:
@@ -320,12 +322,10 @@ async def on_interaction(interaction):
             await interaction.response.send_message(f"✅ Your ticket has been opened: {channel.mention}", ephemeral=True)
         else:
             await interaction.response.send_message(f"❌ {error_message}", ephemeral=True)
-    # Removed the else: await bot.process_commands(interaction) block, as it caused AttributeError.
-    # Commands from messages are handled automatically, and interactions are handled by this event.
 
 # --- New Ticket Command ---
 @bot.command()
-@commands.has_permissions(manage_channels=True) # Or a custom staff role check
+@commands.has_permissions(manage_channels=True)
 async def openticket(ctx, member: discord.Member, category_key: str):
     """
     Opens a new ticket for a specified member in a given category.
@@ -396,7 +396,7 @@ async def auto_close_ticket(channel_id, guild_id):
                     )
                     embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
                     embed.add_field(name="Reason", value=close_reason, inline=False)
-                    embed.add_field(name="Ticket Creator User ID", value=ticket_creator_id_val, inline=False) # Added User ID
+                    embed.add_field(name="Ticket Creator User ID", value=ticket_creator_id_val, inline=False)
                     await log_channel.send(embed=embed)
                 print(f"Auto-closed ticket: {channel.name} ({channel.id})")
             else:
@@ -495,7 +495,7 @@ async def close(ctx):
                 )
                 embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
                 embed.add_field(name="Closed By", value=ctx.author.mention, inline=True)
-                embed.add_field(name="Closed By User ID", value=ctx.author.id, inline=False) # Added User ID
+                embed.add_field(name="Closed By User ID", value=ctx.author.id, inline=False)
                 await log_channel.send(embed=embed)
             print(f"Manually closed ticket: {ctx.channel.name} ({ctx.channel.id}) by {ctx.author.name}")
         elif view.value is False:
@@ -554,7 +554,7 @@ async def remove(ctx, member: discord.Member):
                 embed = discord.Embed(
                     title="➖ User Removed from Ticket",
                     description=f"{member.mention} has been removed from {ctx.channel.mention}.",
-                    color=discord.Color.orange() # Use orange for removal
+                    color=discord.Color.orange()
                 )
                 embed.add_field(name="Action By", value=ctx.author.mention, inline=True)
                 embed.add_field(name="Ticket Channel", value=ctx.channel.name, inline=True)
@@ -567,7 +567,6 @@ async def remove(ctx, member: discord.Member):
             traceback.print_exc()
     else:
         await ctx.send("❌ This command can only be used in ticket channels.")
-
 
 # --- Transcript Function ---
 async def create_transcript(channel, closer, auto_closed=False):
