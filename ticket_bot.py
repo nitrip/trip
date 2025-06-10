@@ -249,120 +249,132 @@ async def create_new_ticket(guild: discord.Guild, user: discord.Member, category
         delete_button = discord.ui.Button(label="Delete Ticket", style=discord.ButtonStyle.danger, custom_id="delete_ticket_button", emoji="🗑️")
 
         async def close_callback(interaction: discord.Interaction):
-            # Both users and admins can close tickets (mark as closed)
-            member = interaction.guild.get_member(interaction.user.id)
-            is_staff_or_owner = any(role.id in [STAFF_ROLE_ID, OWNER_ROLE_ID] for role in member.roles)
-            is_ticket_creator_user = TICKET_CREATOR.get(interaction.channel.id) == interaction.user.id
+            try:
+                # Both users and admins can close tickets (mark as closed)
+                member = interaction.guild.get_member(interaction.user.id)
+                is_staff_or_owner = any(role.id in [STAFF_ROLE_ID, OWNER_ROLE_ID] for role in member.roles)
+                is_ticket_creator_user = TICKET_CREATOR.get(interaction.channel.id) == interaction.user.id
 
-            if is_ticket_creator_user or is_staff_or_owner:
-                if interaction.channel.id == channel.id:
-                    # Check if ticket is already closed
-                    if interaction.channel.id in CLOSED_TICKETS:
-                        await interaction.response.send_message("❌ This ticket is already marked as closed.", ephemeral=True)
-                        return
-                    
-                    await interaction.response.send_message("Are you sure you want to close this ticket? Click the confirmation button below.", ephemeral=True)
-                    confirm_view = ConfirmView(interaction.user.id)
-                    confirm_message = await interaction.followup.send("Confirm close?", view=confirm_view, ephemeral=True)
-                    await confirm_view.wait()
-
-                    if confirm_view.value is True:
-                        # Mark ticket as closed but don't delete
-                        CLOSED_TICKETS[channel.id] = {
-                            'closed_by': interaction.user.id,
-                            'closed_at': discord.utils.utcnow().isoformat(),
-                            'creator_id': TICKET_CREATOR.get(channel.id)
-                        }
-                        save_ticket_data()
+                if is_ticket_creator_user or is_staff_or_owner:
+                    if interaction.channel.id == channel.id:
+                        # Check if ticket is already closed
+                        if interaction.channel.id in CLOSED_TICKETS:
+                            await interaction.response.send_message("❌ This ticket is already marked as closed.", ephemeral=True)
+                            return
                         
-                        # Cancel auto-close timer
-                        task = ticket_timers.pop(channel.id, None)
-                        if task:
-                            task.cancel()
+                        await interaction.response.send_message("Are you sure you want to close this ticket? Click the confirmation button below.", ephemeral=True)
+                        confirm_view = ConfirmView(interaction.user.id)
+                        confirm_message = await interaction.followup.send("Confirm close?", view=confirm_view, ephemeral=True)
+                        await confirm_view.wait()
 
-                        # Update channel name to show it's closed
-                        new_name = f"closed-{channel.name}" if not channel.name.startswith("closed-") else channel.name
-                        await channel.edit(name=new_name)
-                        
-                        # Send closed message
-                        embed = discord.Embed(
-                            title="🔒 Ticket Closed",
-                            description=f"This ticket has been marked as closed by {interaction.user.mention}.\n\n**Note:** Only staff can delete this ticket channel.",
-                            color=discord.Color.orange()
-                        )
-                        await channel.send(embed=embed)
-                        
-                        # Create transcript
-                        await create_transcript(channel, interaction.user, ticket_closed=True)
+                        if confirm_view.value is True:
+                            # Mark ticket as closed but don't delete
+                            CLOSED_TICKETS[channel.id] = {
+                                'closed_by': interaction.user.id,
+                                'closed_at': discord.utils.utcnow().isoformat(),
+                                'creator_id': TICKET_CREATOR.get(channel.id)
+                            }
+                            save_ticket_data()
+                            
+                            # Cancel auto-close timer
+                            task = ticket_timers.pop(channel.id, None)
+                            if task:
+                                task.cancel()
 
-                        if log_channel:
+                            # Update channel name to show it's closed
+                            new_name = f"closed-{channel.name}" if not channel.name.startswith("closed-") else channel.name
+                            await channel.edit(name=new_name)
+                            
+                            # Send closed message
                             embed = discord.Embed(
-                                title="🔒 Ticket Marked as Closed",
-                                description=f"Ticket `{channel.name}` has been marked as closed (not deleted).",
+                                title="🔒 Ticket Closed",
+                                description=f"This ticket has been marked as closed by {interaction.user.mention}.\n\n**Note:** Only staff can delete this ticket channel.",
                                 color=discord.Color.orange()
                             )
-                            ticket_creator_id_val = TICKET_CREATOR.get(channel.id, "Unknown")
-                            ticket_creator_mention = f"<@{ticket_creator_id_val}>" if ticket_creator_id_val != "Unknown" else "Unknown User"
-                            embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
-                            embed.add_field(name="Closed By", value=interaction.user.mention, inline=True)
-                            embed.add_field(name="Status", value="Awaiting Admin Deletion", inline=True)
-                            await log_channel.send(embed=embed)
-                        print(f"Ticket marked as closed: {channel.name} ({channel.id}) by {interaction.user.name}")
-                    elif confirm_view.value is False:
-                        await confirm_message.edit(content="Ticket close canceled.", view=None)
+                            await channel.send(embed=embed)
+                            
+                            # Create transcript
+                            await create_transcript(channel, interaction.user, ticket_closed=True)
+
+                            if log_channel:
+                                embed = discord.Embed(
+                                    title="🔒 Ticket Marked as Closed",
+                                    description=f"Ticket `{channel.name}` has been marked as closed (not deleted).",
+                                    color=discord.Color.orange()
+                                )
+                                ticket_creator_id_val = TICKET_CREATOR.get(channel.id, "Unknown")
+                                ticket_creator_mention = f"<@{ticket_creator_id_val}>" if ticket_creator_id_val != "Unknown" else "Unknown User"
+                                embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
+                                embed.add_field(name="Closed By", value=interaction.user.mention, inline=True)
+                                embed.add_field(name="Status", value="Awaiting Admin Deletion", inline=True)
+                                await log_channel.send(embed=embed)
+                            print(f"Ticket marked as closed: {channel.name} ({channel.id}) by {interaction.user.name}")
+                        elif confirm_view.value is False:
+                            await confirm_message.edit(content="Ticket close canceled.", view=None)
+                        else:
+                            await confirm_message.edit(content="Ticket close confirmation timed out.", view=None)
                     else:
-                        await confirm_message.edit(content="Ticket close confirmation timed out.", view=None)
+                        await interaction.response.send_message("This button is for a different ticket.", ephemeral=True)
                 else:
-                    await interaction.response.send_message("This button is for a different ticket.", ephemeral=True)
-            else:
-                await interaction.response.send_message("❌ You are not authorized to close this ticket.", ephemeral=True)
+                    await interaction.response.send_message("❌ You are not authorized to close this ticket.", ephemeral=True)
+            except Exception as e:
+                print(f"Error in close_callback: {e}")
+                traceback.print_exc()
+                if not interaction.response.is_done():
+                    await interaction.response.send_message("❌ An error occurred while processing your request.", ephemeral=True)
 
         async def delete_callback(interaction: discord.Interaction):
-            # Only admins can delete tickets
-            member = interaction.guild.get_member(interaction.user.id)
-            is_staff_or_owner = any(role.id in [STAFF_ROLE_ID, OWNER_ROLE_ID] for role in member.roles)
+            try:
+                # Only admins can delete tickets
+                member = interaction.guild.get_member(interaction.user.id)
+                is_staff_or_owner = any(role.id in [STAFF_ROLE_ID, OWNER_ROLE_ID] for role in member.roles)
 
-            if is_staff_or_owner:
-                if interaction.channel.id == channel.id:
-                    await interaction.response.send_message("Are you sure you want to DELETE this ticket? This action cannot be undone. Click the confirmation button below.", ephemeral=True)
-                    confirm_view = ConfirmView(interaction.user.id)
-                    confirm_message = await interaction.followup.send("Confirm DELETE?", view=confirm_view, ephemeral=True)
-                    await confirm_view.wait()
+                if is_staff_or_owner:
+                    if interaction.channel.id == channel.id:
+                        await interaction.response.send_message("Are you sure you want to DELETE this ticket? This action cannot be undone. Click the confirmation button below.", ephemeral=True)
+                        confirm_view = ConfirmView(interaction.user.id)
+                        confirm_message = await interaction.followup.send("Confirm DELETE?", view=confirm_view, ephemeral=True)
+                        await confirm_view.wait()
 
-                    if confirm_view.value is True:
-                        # Clean up data
-                        task = ticket_timers.pop(channel.id, None)
-                        if task:
-                            task.cancel()
-                        ticket_creator_id_val = TICKET_CREATOR.pop(channel.id, "Unknown")
-                        CLOSED_TICKETS.pop(channel.id, None)
-                        save_ticket_data()
-                        ticket_creator_mention = f"<@{ticket_creator_id_val}>" if ticket_creator_id_val != "Unknown" else "Unknown User"
+                        if confirm_view.value is True:
+                            # Clean up data
+                            task = ticket_timers.pop(channel.id, None)
+                            if task:
+                                task.cancel()
+                            ticket_creator_id_val = TICKET_CREATOR.pop(channel.id, "Unknown")
+                            CLOSED_TICKETS.pop(channel.id, None)
+                            save_ticket_data()
+                            ticket_creator_mention = f"<@{ticket_creator_id_val}>" if ticket_creator_id_val != "Unknown" else "Unknown User"
 
-                        # Create final transcript if not already created
-                        await create_transcript(channel, interaction.user, ticket_deleted=True)
-                        await asyncio.sleep(1)
-                        await channel.delete(reason=f"Ticket deleted by {interaction.user.name}")
+                            # Create final transcript if not already created
+                            await create_transcript(channel, interaction.user, ticket_deleted=True)
+                            await asyncio.sleep(1)
+                            await channel.delete(reason=f"Ticket deleted by {interaction.user.name}")
 
-                        if log_channel:
-                            embed = discord.Embed(
-                                title="🗑️ Ticket Deleted",
-                                description=f"Ticket `{channel.name}` has been permanently deleted.",
-                                color=discord.Color.red()
-                            )
-                            embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
-                            embed.add_field(name="Deleted By", value=interaction.user.mention, inline=True)
-                            embed.add_field(name="Deletion Method", value="Admin Button", inline=True)
-                            await log_channel.send(embed=embed)
-                        print(f"Ticket deleted: {channel.name} ({channel.id}) by admin {interaction.user.name}")
-                    elif confirm_view.value is False:
-                        await confirm_message.edit(content="Ticket deletion canceled.", view=None)
+                            if log_channel:
+                                embed = discord.Embed(
+                                    title="🗑️ Ticket Deleted",
+                                    description=f"Ticket `{channel.name}` has been permanently deleted.",
+                                    color=discord.Color.red()
+                                )
+                                embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
+                                embed.add_field(name="Deleted By", value=interaction.user.mention, inline=True)
+                                embed.add_field(name="Deletion Method", value="Admin Button", inline=True)
+                                await log_channel.send(embed=embed)
+                            print(f"Ticket deleted: {channel.name} ({channel.id}) by admin {interaction.user.name}")
+                        elif confirm_view.value is False:
+                            await confirm_message.edit(content="Ticket deletion canceled.", view=None)
+                        else:
+                            await confirm_message.edit(content="Ticket deletion confirmation timed out.", view=None)
                     else:
-                        await confirm_message.edit(content="Ticket deletion confirmation timed out.", view=None)
+                        await interaction.response.send_message("This button is for a different ticket.", ephemeral=True)
                 else:
-                    await interaction.response.send_message("This button is for a different ticket.", ephemeral=True)
-            else:
-                await interaction.response.send_message("❌ Only staff members and owners can delete tickets.", ephemeral=True)
+                    await interaction.response.send_message("❌ Only staff members and owners can delete tickets.", ephemeral=True)
+            except Exception as e:
+                print(f"Error in delete_callback: {e}")
+                traceback.print_exc()
+                if not interaction.response.is_done():
+                    await interaction.response.send_message("❌ An error occurred while processing your request.", ephemeral=True)
 
         close_button.callback = close_callback
         delete_button.callback = delete_callback
