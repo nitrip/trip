@@ -17,7 +17,10 @@ AUTO_CLOSE_TIME = 1800  # 30 minutes in seconds
 # Persistent storage for active tickets
 TICKET_DATA_FILE = 'ticket_data.json'
 TICKET_CREATOR = {}  # This will be loaded from/saved to TICKET_DATA_FILE
+CLOSED_TICKETS = {}  # Track tickets marked as closed but not deleted
+USER_COOLDOWNS = {}  # Track when users last created tickets
 ticket_timers = {}  # In-memory for active auto-close tasks
+COOLDOWN_TIME = 1800  # 30 minutes in seconds
 
 # Define your categories with labels, emojis, and button styles.
 CATEGORIES_DATA = {
@@ -36,30 +39,90 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 # --- Helper Functions for Persistence ---
 def load_ticket_data():
-    """Loads ticket data from the JSON file into TICKET_CREATOR."""
-    global TICKET_CREATOR
+    """Loads ticket data from the JSON file into TICKET_CREATOR and CLOSED_TICKETS."""
+    global TICKET_CREATOR, CLOSED_TICKETS
     if os.path.exists(TICKET_DATA_FILE):
         with open(TICKET_DATA_FILE, 'r') as f:
             try:
-                TICKET_CREATOR = json.load(f)
-                # Convert string keys (channel IDs from JSON) back to int for consistent use
-                TICKET_CREATOR = {int(k): v for k, v in TICKET_CREATOR.items()}
+                data = json.load(f)
+                TICKET_CREATOR = {int(k): v for k, v in data.get('creators', {}).items()}
+                CLOSED_TICKETS = {int(k): v for k, v in data.get('closed', {}).items()}
                 print(f"Loaded ticket data: {TICKET_CREATOR}")
+                print(f"Loaded closed tickets: {CLOSED_TICKETS}")
             except json.JSONDecodeError:
                 print("Error decoding ticket_data.json, starting with empty data.")
                 TICKET_CREATOR = {}
+                CLOSED_TICKETS = {}
     else:
         TICKET_CREATOR = {}
+        CLOSED_TICKETS = {}
 
 def save_ticket_data():
-    """Saves current ticket data from TICKET_CREATOR to the JSON file."""
+    """Saves current ticket data from TICKET_CREATOR and CLOSED_TICKETS to the JSON file."""
     with open(TICKET_DATA_FILE, 'w') as f:
         # Convert int keys (channel IDs) to string for JSON serialization
-        json.dump({str(k): v for k, v in TICKET_CREATOR.items()}, f, indent=4)
+        data = {
+            'creators': {str(k): v for k, v in TICKET_CREATOR.items()},
+            'closed': {str(k): v for k, v in CLOSED_TICKETS.items()}
+        }
+        json.dump(data, f, indent=4)
         print(f"Saved ticket data: {TICKET_CREATOR}")
+        print(f"Saved closed tickets: {CLOSED_TICKETS}")
+
+# --- Server Boost Modal Form ---
+class ServerBoostModal(discord.ui.Modal, title='Server Boost Request'):
+    def __init__(self):
+        super().__init__()
+
+    server_link = discord.ui.TextInput(
+        label='Server Link/Invite',
+        placeholder='Paste your Discord server invite link here...',
+        required=True,
+        max_length=200
+    )
+    
+    duration = discord.ui.TextInput(
+        label='Boost Duration',
+        placeholder='How long do you need the boosts? (e.g., 1 month, 2 weeks, permanent)',
+        required=True,
+        max_length=100
+    )
+    
+    boost_count = discord.ui.TextInput(
+        label='Number of Boosts Needed',
+        placeholder='How many boosts do you need? (e.g., 2, 14, etc.)',
+        required=True,
+        max_length=50
+    )
+    
+    additional_info = discord.ui.TextInput(
+        label='Additional Information',
+        placeholder='Any specific requirements, timeline, or other details...',
+        required=False,
+        style=discord.TextStyle.paragraph,
+        max_length=500
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Store the form data temporarily
+        guild = interaction.guild
+        user = interaction.user
+        
+        # Create the ticket with the form data
+        channel, error_message = await create_new_ticket(guild, user, "boosts", {
+            'server_link': self.server_link.value,
+            'duration': self.duration.value,
+            'boost_count': self.boost_count.value,
+            'additional_info': self.additional_info.value
+        })
+
+        if channel:
+            await interaction.response.send_message(f"✅ Your Server Boost ticket has been opened: {channel.mention}", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ {error_message}", ephemeral=True)
 
 # --- Core Ticket Management Function ---
-async def create_new_ticket(guild: discord.Guild, user: discord.Member, category_id_key: str):
+async def create_new_ticket(guild: discord.Guild, user: discord.Member, category_id_key: str, form_data=None):
     """
     Handles the creation of a new ticket channel.
 
@@ -67,6 +130,7 @@ async def create_new_ticket(guild: discord.Guild, user: discord.Member, category
         guild (discord.Guild): The guild where the ticket is being created.
         user (discord.Member): The user for whom the ticket is being created.
         category_id_key (str): The key from CATEGORIES_DATA for the ticket category.
+        form_data (dict): Optional form data for specific ticket types.
 
     Returns:
         tuple: A tuple containing (discord.TextChannel, str) if successful,
@@ -74,6 +138,22 @@ async def create_new_ticket(guild: discord.Guild, user: discord.Member, category
     """
     category_label = CATEGORIES_DATA[category_id_key]["label"]
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
+
+    # Check cooldown (skip for staff/owners)
+    staff_role = guild.get_role(STAFF_ROLE_ID)
+    owner_role = guild.get_role(OWNER_ROLE_ID)
+    is_staff_or_owner = staff_role in user.roles or owner_role in user.roles
+    
+    if not is_staff_or_owner:
+        current_time = discord.utils.utcnow().timestamp()
+        last_ticket_time = USER_COOLDOWNS.get(user.id, 0)
+        time_since_last = current_time - last_ticket_time
+        
+        if time_since_last < COOLDOWN_TIME:
+            remaining_time = COOLDOWN_TIME - time_since_last
+            minutes = int(remaining_time // 60)
+            seconds = int(remaining_time % 60)
+            return None, f"⏰ You must wait **{minutes}m {seconds}s** before creating another ticket. This prevents spam and ensures fair support for everyone."
 
     # Check for existing tickets by the user within the specific category
     for channel_id, creator_id in TICKET_CREATOR.items():
@@ -128,6 +208,11 @@ async def create_new_ticket(guild: discord.Guild, user: discord.Member, category
         await channel.edit(overwrites=overwrites)
 
         TICKET_CREATOR[channel.id] = user.id
+        
+        # Update user cooldown (only for non-staff)
+        if not is_staff_or_owner:
+            USER_COOLDOWNS[user.id] = discord.utils.utcnow().timestamp()
+        
         save_ticket_data()
 
         # Ticket initial message
@@ -140,54 +225,89 @@ async def create_new_ticket(guild: discord.Guild, user: discord.Member, category
             ),
             color=discord.Color.blue()
         )
-        embed.add_field(name="Payment Methods", value=(
-            f"**PayPal**: <:Paypal:1374290794340548619> (F&F)\n"
-            f"**Cash App**: <:PurpleCashApp:1374290682835107892>\n"
-            f"**Apple Pay**: <:Apple_Pay_Logo:1374291214983102474>\n"
-            f"**Zelle**: <:Zelle:1374291283329286194>\n"
-            f"**Litecoin (LTC)**: <:emojigg_ltc:1374291116966412348>"
-        ), inline=False)
+        
+        # Add category-specific information
+        if category_id_key == "boosts" and form_data:
+            embed.add_field(name="🔗 Server Link", value=form_data['server_link'], inline=False)
+            embed.add_field(name="⏰ Duration", value=form_data['duration'], inline=True)
+            embed.add_field(name="🚀 Boosts Needed", value=form_data['boost_count'], inline=True)
+            if form_data['additional_info'].strip():
+                embed.add_field(name="📝 Additional Info", value=form_data['additional_info'], inline=False)
+        else:
+            # Keep payment methods for other ticket types
+            embed.add_field(name="Payment Methods", value=(
+                f"**PayPal**: <:Paypal:1374290794340548619> (F&F)\n"
+                f"**Cash App**: <:PurpleCashApp:1374290682835107892>\n"
+                f"**Apple Pay**: <:Apple_Pay_Logo:1374291214983102474>\n"
+                f"**Zelle**: <:Zelle:1374291283329286194>\n"
+                f"**Litecoin (LTC)**: <:emojigg_ltc:1374291116966412348>"
+            ), inline=False)
+        
         embed.set_footer(text="A staff member will assist you shortly. Thank you for your patience! 💙")
 
         close_button = discord.ui.Button(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id="close_ticket_button", emoji="🔒")
+        delete_button = discord.ui.Button(label="Delete Ticket", style=discord.ButtonStyle.danger, custom_id="delete_ticket_button", emoji="🗑️")
 
         async def close_callback(interaction: discord.Interaction):
-            # FIXED: Check if user has any of the required roles, not just top role
+            # Both users and admins can close tickets (mark as closed)
             member = interaction.guild.get_member(interaction.user.id)
             is_staff_or_owner = any(role.id in [STAFF_ROLE_ID, OWNER_ROLE_ID] for role in member.roles)
             is_ticket_creator_user = TICKET_CREATOR.get(interaction.channel.id) == interaction.user.id
 
             if is_ticket_creator_user or is_staff_or_owner:
                 if interaction.channel.id == channel.id:
+                    # Check if ticket is already closed
+                    if interaction.channel.id in CLOSED_TICKETS:
+                        await interaction.response.send_message("❌ This ticket is already marked as closed.", ephemeral=True)
+                        return
+                    
                     await interaction.response.send_message("Are you sure you want to close this ticket? Click the confirmation button below.", ephemeral=True)
                     confirm_view = ConfirmView(interaction.user.id)
                     confirm_message = await interaction.followup.send("Confirm close?", view=confirm_view, ephemeral=True)
                     await confirm_view.wait()
 
                     if confirm_view.value is True:
+                        # Mark ticket as closed but don't delete
+                        CLOSED_TICKETS[channel.id] = {
+                            'closed_by': interaction.user.id,
+                            'closed_at': discord.utils.utcnow().isoformat(),
+                            'creator_id': TICKET_CREATOR.get(channel.id)
+                        }
+                        save_ticket_data()
+                        
+                        # Cancel auto-close timer
                         task = ticket_timers.pop(channel.id, None)
                         if task:
                             task.cancel()
-                        ticket_creator_id_val = TICKET_CREATOR.pop(channel.id, "Unknown")
-                        save_ticket_data()
-                        ticket_creator_mention = f"<@{ticket_creator_id_val}>" if ticket_creator_id_val != "Unknown" else "Unknown User"
 
-                        await create_transcript(channel, interaction.user)
-                        await asyncio.sleep(1)
-                        await channel.delete(reason=f"Ticket closed by {interaction.user.name} via button")
+                        # Update channel name to show it's closed
+                        new_name = f"closed-{channel.name}" if not channel.name.startswith("closed-") else channel.name
+                        await channel.edit(name=new_name)
+                        
+                        # Send closed message
+                        embed = discord.Embed(
+                            title="🔒 Ticket Closed",
+                            description=f"This ticket has been marked as closed by {interaction.user.mention}.\n\n**Note:** Only staff can delete this ticket channel.",
+                            color=discord.Color.orange()
+                        )
+                        await channel.send(embed=embed)
+                        
+                        # Create transcript
+                        await create_transcript(channel, interaction.user, ticket_closed=True)
 
                         if log_channel:
                             embed = discord.Embed(
-                                title="✅ Ticket Closed",
-                                description=f"Ticket `{channel.name}` has been closed.",
-                                color=discord.Color.green()
+                                title="🔒 Ticket Marked as Closed",
+                                description=f"Ticket `{channel.name}` has been marked as closed (not deleted).",
+                                color=discord.Color.orange()
                             )
+                            ticket_creator_id_val = TICKET_CREATOR.get(channel.id, "Unknown")
+                            ticket_creator_mention = f"<@{ticket_creator_id_val}>" if ticket_creator_id_val != "Unknown" else "Unknown User"
                             embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
                             embed.add_field(name="Closed By", value=interaction.user.mention, inline=True)
-                            embed.add_field(name="Closure Method", value="Button Interaction", inline=True)
-                            embed.add_field(name="Closed By User ID", value=interaction.user.id, inline=False)
+                            embed.add_field(name="Status", value="Awaiting Admin Deletion", inline=True)
                             await log_channel.send(embed=embed)
-                        print(f"Manually closed ticket: {channel.name} ({channel.id}) by button interaction.")
+                        print(f"Ticket marked as closed: {channel.name} ({channel.id}) by {interaction.user.name}")
                     elif confirm_view.value is False:
                         await confirm_message.edit(content="Ticket close canceled.", view=None)
                     else:
@@ -195,11 +315,60 @@ async def create_new_ticket(guild: discord.Guild, user: discord.Member, category
                 else:
                     await interaction.response.send_message("This button is for a different ticket.", ephemeral=True)
             else:
-                await interaction.response.send_message("You are not authorized to close this ticket.", ephemeral=True)
+                await interaction.response.send_message("❌ You are not authorized to close this ticket.", ephemeral=True)
+
+        async def delete_callback(interaction: discord.Interaction):
+            # Only admins can delete tickets
+            member = interaction.guild.get_member(interaction.user.id)
+            is_staff_or_owner = any(role.id in [STAFF_ROLE_ID, OWNER_ROLE_ID] for role in member.roles)
+
+            if is_staff_or_owner:
+                if interaction.channel.id == channel.id:
+                    await interaction.response.send_message("Are you sure you want to DELETE this ticket? This action cannot be undone. Click the confirmation button below.", ephemeral=True)
+                    confirm_view = ConfirmView(interaction.user.id)
+                    confirm_message = await interaction.followup.send("Confirm DELETE?", view=confirm_view, ephemeral=True)
+                    await confirm_view.wait()
+
+                    if confirm_view.value is True:
+                        # Clean up data
+                        task = ticket_timers.pop(channel.id, None)
+                        if task:
+                            task.cancel()
+                        ticket_creator_id_val = TICKET_CREATOR.pop(channel.id, "Unknown")
+                        CLOSED_TICKETS.pop(channel.id, None)
+                        save_ticket_data()
+                        ticket_creator_mention = f"<@{ticket_creator_id_val}>" if ticket_creator_id_val != "Unknown" else "Unknown User"
+
+                        # Create final transcript if not already created
+                        await create_transcript(channel, interaction.user, ticket_deleted=True)
+                        await asyncio.sleep(1)
+                        await channel.delete(reason=f"Ticket deleted by {interaction.user.name}")
+
+                        if log_channel:
+                            embed = discord.Embed(
+                                title="🗑️ Ticket Deleted",
+                                description=f"Ticket `{channel.name}` has been permanently deleted.",
+                                color=discord.Color.red()
+                            )
+                            embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
+                            embed.add_field(name="Deleted By", value=interaction.user.mention, inline=True)
+                            embed.add_field(name="Deletion Method", value="Admin Button", inline=True)
+                            await log_channel.send(embed=embed)
+                        print(f"Ticket deleted: {channel.name} ({channel.id}) by admin {interaction.user.name}")
+                    elif confirm_view.value is False:
+                        await confirm_message.edit(content="Ticket deletion canceled.", view=None)
+                    else:
+                        await confirm_message.edit(content="Ticket deletion confirmation timed out.", view=None)
+                else:
+                    await interaction.response.send_message("This button is for a different ticket.", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Only staff members and owners can delete tickets.", ephemeral=True)
 
         close_button.callback = close_callback
+        delete_button.callback = delete_callback
         ticket_view = discord.ui.View(timeout=None)
         ticket_view.add_item(close_button)
+        ticket_view.add_item(delete_button)
 
         await channel.send(embed=embed, view=ticket_view)
 
@@ -316,6 +485,13 @@ async def on_interaction(interaction):
             await interaction.response.send_message("This action can only be performed in a server.", ephemeral=True)
             return
 
+        # Special handling for server boosts - show modal form
+        if category_id_key == "boosts":
+            modal = ServerBoostModal()
+            await interaction.response.send_modal(modal)
+            return
+        
+        # For other categories, create ticket normally
         channel, error_message = await create_new_ticket(guild, user, category_id_key)
 
         if channel:
@@ -331,6 +507,7 @@ async def openticket(ctx, member: discord.Member, category_key: str):
     Opens a new ticket for a specified member in a given category.
     Usage: !openticket <@member> <category_key>
     Example: !openticket @User claims
+    Note: This command bypasses cooldowns since it's admin-initiated.
     """
     if category_key not in CATEGORIES_DATA:
         available_categories = ", ".join(CATEGORIES_DATA.keys())
@@ -348,6 +525,31 @@ async def openticket(ctx, member: discord.Member, category_key: str):
         await ctx.send(f"✅ Ticket opened for {member.mention}: {channel.mention}")
     else:
         await ctx.send(f"❌ Could not open ticket for {member.mention}: {error_message}")
+
+# --- Cooldown Check Command ---
+@bot.command()
+async def cooldown(ctx):
+    """Check your current ticket creation cooldown status."""
+    # Skip cooldown check for staff/owners
+    staff_role = ctx.guild.get_role(STAFF_ROLE_ID)
+    owner_role = ctx.guild.get_role(OWNER_ROLE_ID)
+    is_staff_or_owner = staff_role in ctx.author.roles or owner_role in ctx.author.roles
+    
+    if is_staff_or_owner:
+        await ctx.send("✅ **Staff/Owner:** You have no cooldown restrictions.")
+        return
+    
+    current_time = discord.utils.utcnow().timestamp()
+    last_ticket_time = USER_COOLDOWNS.get(ctx.author.id, 0)
+    time_since_last = current_time - last_ticket_time
+    
+    if time_since_last >= COOLDOWN_TIME:
+        await ctx.send("✅ **Ready:** You can create a new ticket now!")
+    else:
+        remaining_time = COOLDOWN_TIME - time_since_last
+        minutes = int(remaining_time // 60)
+        seconds = int(remaining_time % 60)
+        await ctx.send(f"⏰ **Cooldown Active:** You can create another ticket in **{minutes}m {seconds}s**")
 
 # --- Auto-Close Function ---
 async def auto_close_ticket(channel_id, guild_id):
@@ -469,41 +671,117 @@ async def close(ctx):
             await ctx.send("❌ You do not have permission to close this ticket.")
             return
 
+        # Check if ticket is already closed
+        if ctx.channel.id in CLOSED_TICKETS:
+            await ctx.send("❌ This ticket is already marked as closed.")
+            return
+
         original_message_sent = await ctx.send(f"Are you sure you want to close this ticket?")
         view = ConfirmView(ctx.author.id)
         await original_message_sent.edit(view=view)
         await view.wait()
 
         if view.value is True:
+            # Mark ticket as closed but don't delete
+            CLOSED_TICKETS[ctx.channel.id] = {
+                'closed_by': ctx.author.id,
+                'closed_at': discord.utils.utcnow().isoformat(),
+                'creator_id': TICKET_CREATOR.get(ctx.channel.id)
+            }
+            save_ticket_data()
+            
+            # Cancel auto-close timer
             task = ticket_timers.pop(ctx.channel.id, None)
             if task:
                 task.cancel()
 
-            ticket_creator_id_val = TICKET_CREATOR.pop(ctx.channel.id, "Unknown")
-            save_ticket_data()
-            ticket_creator_mention = f"<@{ticket_creator_id_val}>" if ticket_creator_id_val != "Unknown" else "Unknown User"
-
-            await create_transcript(ctx.channel, ctx.author)
-            await asyncio.sleep(1)
-            await ctx.channel.delete(reason=f"Ticket closed by {ctx.author.name}")
+            # Update channel name to show it's closed
+            new_name = f"closed-{ctx.channel.name}" if not ctx.channel.name.startswith("closed-") else ctx.channel.name
+            await ctx.channel.edit(name=new_name)
+            
+            # Send closed message
+            embed = discord.Embed(
+                title="🔒 Ticket Closed",
+                description=f"This ticket has been marked as closed by {ctx.author.mention}.\n\n**Note:** Only staff can delete this ticket channel.",
+                color=discord.Color.orange()
+            )
+            await ctx.channel.send(embed=embed)
+            
+            # Create transcript
+            await create_transcript(ctx.channel, ctx.author, ticket_closed=True)
 
             if log_channel:
                 embed = discord.Embed(
-                    title="✅ Ticket Closed",
-                    description=f"Ticket `{ctx.channel.name}` has been closed.",
-                    color=discord.Color.green()
+                    title="🔒 Ticket Marked as Closed",
+                    description=f"Ticket `{ctx.channel.name}` has been marked as closed (not deleted).",
+                    color=discord.Color.orange()
                 )
+                ticket_creator_id_val = TICKET_CREATOR.get(ctx.channel.id, "Unknown")
+                ticket_creator_mention = f"<@{ticket_creator_id_val}>" if ticket_creator_id_val != "Unknown" else "Unknown User"
                 embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
                 embed.add_field(name="Closed By", value=ctx.author.mention, inline=True)
-                embed.add_field(name="Closed By User ID", value=ctx.author.id, inline=False)
+                embed.add_field(name="Status", value="Awaiting Admin Deletion", inline=True)
                 await log_channel.send(embed=embed)
-            print(f"Manually closed ticket: {ctx.channel.name} ({ctx.channel.id}) by {ctx.author.name}")
+            print(f"Ticket marked as closed: {ctx.channel.name} ({ctx.channel.id}) by {ctx.author.name}")
         elif view.value is False:
             await original_message_sent.edit(content="Ticket close canceled.", view=None)
         else:
             await original_message_sent.edit(content="Ticket close confirmation timed out.", view=None)
     else:
         await ctx.send("This command can only be used in ticket channels.")
+
+# --- Delete Command (Admin Only) ---
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def delete(ctx):
+    """Permanently deletes the current ticket channel (Admin only)."""
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    if ctx.channel.category and ctx.channel.category.name == "Tickets":
+        staff_role = ctx.guild.get_role(STAFF_ROLE_ID)
+        owner_role = ctx.guild.get_role(OWNER_ROLE_ID)
+        is_staff_or_owner = staff_role in ctx.author.roles or owner_role in ctx.author.roles
+
+        if not is_staff_or_owner:
+            await ctx.send("❌ Only staff members and owners can delete tickets.")
+            return
+
+        original_message_sent = await ctx.send(f"⚠️ Are you sure you want to PERMANENTLY DELETE this ticket? This action cannot be undone!")
+        view = ConfirmView(ctx.author.id)
+        await original_message_sent.edit(view=view)
+        await view.wait()
+
+        if view.value is True:
+            # Clean up data
+            task = ticket_timers.pop(ctx.channel.id, None)
+            if task:
+                task.cancel()
+            ticket_creator_id_val = TICKET_CREATOR.pop(ctx.channel.id, "Unknown")
+            CLOSED_TICKETS.pop(ctx.channel.id, None)
+            save_ticket_data()
+            ticket_creator_mention = f"<@{ticket_creator_id_val}>" if ticket_creator_id_val != "Unknown" else "Unknown User"
+
+            # Create final transcript
+            await create_transcript(ctx.channel, ctx.author, ticket_deleted=True)
+            await asyncio.sleep(1)
+            await ctx.channel.delete(reason=f"Ticket deleted by {ctx.author.name}")
+
+            if log_channel:
+                embed = discord.Embed(
+                    title="🗑️ Ticket Deleted",
+                    description=f"Ticket `{ctx.channel.name}` has been permanently deleted.",
+                    color=discord.Color.red()
+                )
+                embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
+                embed.add_field(name="Deleted By", value=ctx.author.mention, inline=True)
+                embed.add_field(name="Deletion Method", value="Admin Command", inline=True)
+                await log_channel.send(embed=embed)
+            print(f"Ticket deleted: {ctx.channel.name} ({ctx.channel.id}) by admin {ctx.author.name}")
+        elif view.value is False:
+            await original_message_sent.edit(content="Ticket deletion canceled.", view=None)
+        else:
+            await original_message_sent.edit(content="Ticket deletion confirmation timed out.", view=None)
+    else:
+        await ctx.send("❌ This command can only be used in ticket channels.")
 
 # --- Add User to Ticket Command ---
 @bot.command()
@@ -569,7 +847,7 @@ async def remove(ctx, member: discord.Member):
         await ctx.send("❌ This command can only be used in ticket channels.")
 
 # --- Transcript Function ---
-async def create_transcript(channel, closer, auto_closed=False):
+async def create_transcript(channel, closer, auto_closed=False, ticket_closed=False, ticket_deleted=False):
     """Creates a transcript of the ticket channel and sends it to the log channel."""
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
     if not log_channel:
@@ -590,7 +868,15 @@ async def create_transcript(channel, closer, auto_closed=False):
     else:
         transcript_content.append(f"Opened by: Unknown User (ID not found in TICKET_CREATOR)")
 
-    transcript_content.append(f"Closed by: {closer.name} (ID: {closer.id})")
+    if ticket_closed:
+        transcript_content.append(f"Marked as closed by: {closer.name} (ID: {closer.id})")
+    elif ticket_deleted:
+        transcript_content.append(f"Deleted by: {closer.name} (ID: {closer.id})")
+    elif auto_closed:
+        transcript_content.append(f"Auto-closed by: {closer.name} (ID: {closer.id})")
+    else:
+        transcript_content.append(f"Action by: {closer.name} (ID: {closer.id})")
+        
     transcript_content.append(f"Timestamp: {discord.utils.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}\n")
 
     try:
@@ -620,13 +906,17 @@ async def create_transcript(channel, closer, auto_closed=False):
 
         embed = discord.Embed(
             title=f"Ticket Transcript: #{channel.name}",
-            description=f"Ticket created by: {ticket_creator_mention}\nClosed by: {closer.mention}",
+            description=f"Ticket created by: {ticket_creator_mention}\nAction by: {closer.mention}",
             color=discord.Color.blue()
         )
         if auto_closed:
-            embed.add_field(name="Closure Type", value="Auto-Closed (Inactivity)", inline=True)
+            embed.add_field(name="Action Type", value="Auto-Closed (Inactivity)", inline=True)
+        elif ticket_closed:
+            embed.add_field(name="Action Type", value="Marked as Closed", inline=True)
+        elif ticket_deleted:
+            embed.add_field(name="Action Type", value="Permanently Deleted", inline=True)
         else:
-            embed.add_field(name="Closure Type", value="Manually Closed", inline=True)
+            embed.add_field(name="Action Type", value="Manual Action", inline=True)
 
         await log_channel.send(embed=embed, file=file)
         os.remove(transcript_filename)
@@ -710,7 +1000,7 @@ async def cash(ctx):
 @bot.command()
 async def ltc(ctx):
     """Displays Litecoin payment information."""
-    await ctx.send("🚀 **Litecoin Address**: LeYqdR1y6EEASgV2Uf5oc1ABkeAHaMmjXx")
+    await ctx.send("LeYqdR1y6EEASgV2Uf5oc1ABkeAHaMmjXx")
 
 # --- Main Execution ---
 if __name__ == '__main__':
