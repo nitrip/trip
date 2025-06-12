@@ -28,6 +28,34 @@ CATEGORIES_DATA = {
     "others": {"label": "Others", "emoji_id": "<:shopping_cart_green12:1376614180869898311>", "style": discord.ButtonStyle.secondary}
 }
 
+# Payment methods configuration - UPDATE THESE WITH YOUR PAYMENT LINKS AND EMOJIS
+PAYMENT_METHODS = {
+    "paypal": {
+        "label": "PayPal",
+        "emoji": "<:Paypal:1374290794340548619>",
+        "link": "https://www.paypal.com/paypalme/Hunter393?country.x=US&locale.x=en_US",
+        "style": discord.ButtonStyle.primary  # Blue
+    },
+    "cashapp": {
+        "label": "Cash App", 
+        "emoji": "<:PurpleCashApp:1374290682835107892>",
+        "link": "https://cash.app/$Tripussy",
+        "style": discord.ButtonStyle.success  # Green
+    },
+    "litecoin": {
+        "label": "Litecoin (LTC)",
+        "emoji": "<:emojigg_ltc:1374291116966412348>",
+        "link": "LeYqdR1y6EEASgV2Uf5oc1ABkeAHaMmjXx",
+        "style": discord.ButtonStyle.secondary  # Black/Gray
+    },
+    "solana": {
+        "label": "Solana (SOL)",
+        "emoji": "<:emojigg_SOL:1378135240056246382>",
+        "link": "Dahr82ChqvzB7Rgcq4F8x1XCrLjJojRPXdJfrsHcfhwr",
+        "style": discord.ButtonStyle.secondary  # Black/Gray
+    }
+}
+
 # Bot setup
 intents = discord.Intents.default()
 intents.message_content = True
@@ -57,6 +85,346 @@ def save_ticket_data():
         # Convert int keys (channel IDs) to string for JSON serialization
         json.dump({str(k): v for k, v in TICKET_CREATOR.items()}, f, indent=4)
         print(f"Saved ticket data: {TICKET_CREATOR}")
+
+# --- Payment Methods View ---
+class PaymentMethodsView(discord.ui.View):
+    """A view for displaying payment method buttons."""
+    
+    def __init__(self):
+        super().__init__(timeout=None)
+        
+        # Add payment method buttons
+        for method_id, method_data in PAYMENT_METHODS.items():
+            button = discord.ui.Button(
+                label=method_data["label"],
+                emoji=method_data["emoji"],
+                style=method_data["style"],
+                custom_id=f"payment_{method_id}"
+            )
+            
+            # Add callback to show payment link
+            async def payment_callback(interaction, method=method_data):
+                await interaction.response.send_message(
+                    method['link'], 
+                    ephemeral=True
+                )
+            button.callback = payment_callback
+                
+            self.add_item(button)
+
+# --- Ticket Control View ---
+class TicketControlView(discord.ui.View):
+    """A view for ticket control buttons (close and payment methods)."""
+    
+    def __init__(self):
+        super().__init__(timeout=None)
+        
+        # Close ticket button
+        close_button = discord.ui.Button(
+            label="Close Ticket", 
+            style=discord.ButtonStyle.danger, 
+            custom_id="close_ticket_button", 
+            emoji="🔒"
+        )
+        close_button.callback = self.close_ticket_callback
+        self.add_item(close_button)
+        
+        # Payment methods button
+        payment_button = discord.ui.Button(
+            label="Payment Methods",
+            style=discord.ButtonStyle.secondary,
+            custom_id="payment_methods_button",
+            emoji="💳"
+        )
+        payment_button.callback = self.payment_methods_callback
+        self.add_item(payment_button)
+    
+    async def close_ticket_callback(self, interaction: discord.Interaction):
+        """Handles the close ticket button click."""
+        # Check if user has any of the required roles, not just top role
+        member = interaction.guild.get_member(interaction.user.id)
+        is_staff_or_owner = any(role.id in [STAFF_ROLE_ID, OWNER_ROLE_ID] for role in member.roles)
+        is_ticket_creator_user = TICKET_CREATOR.get(interaction.channel.id) == interaction.user.id
+
+        if is_ticket_creator_user or is_staff_or_owner:
+            await interaction.response.send_message("🔒 Closing ticket... Starting countdown to deletion.", ephemeral=True)
+            
+            # Cancel auto-close timer
+            task = ticket_timers.pop(interaction.channel.id, None)
+            if task:
+                task.cancel()
+            
+            # Create transcript before deletion
+            await create_transcript(interaction.channel, interaction.user)
+            
+            # 10-second countdown
+            countdown_embed = discord.Embed(
+                title="🔒 Ticket Closed",
+                description=f"This ticket has been closed by {interaction.user.mention}.\n\n**⏱️ Deleting in 10 seconds...**",
+                color=discord.Color.red()
+            )
+            countdown_message = await interaction.channel.send(embed=countdown_embed)
+            
+            # Update countdown every second
+            for i in range(9, 0, -1):
+                await asyncio.sleep(1)
+                countdown_embed.description = f"This ticket has been closed by {interaction.user.mention}.\n\n**⏱️ Deleting in {i} seconds...**"
+                try:
+                    await countdown_message.edit(embed=countdown_embed)
+                except:
+                    break  # Message might be deleted or channel gone
+            
+            await asyncio.sleep(1)
+            
+            # Final cleanup and deletion
+            ticket_creator_id_val = TICKET_CREATOR.pop(interaction.channel.id, "Unknown")
+            save_ticket_data()
+            ticket_creator_mention = f"<@{ticket_creator_id_val}>" if ticket_creator_id_val != "Unknown" else "Unknown User"
+            
+            # Log the deletion
+            log_channel = bot.get_channel(LOG_CHANNEL_ID)
+            if log_channel:
+                embed = discord.Embed(
+                    title="➕ User Added to Ticket",
+                    description=f"{member.mention} has been added to {ctx.channel.mention}.",
+                    color=discord.Color.blue()
+                )
+                embed.add_field(name="Action By", value=ctx.author.mention, inline=True)
+                embed.add_field(name="Ticket Channel", value=ctx.channel.name, inline=True)
+                await log_channel.send(embed=embed)
+        except discord.Forbidden:
+            await ctx.send("❌ I don't have permission to add users to this channel.")
+        except Exception as e:
+            await ctx.send(f"❌ An error occurred: {e}")
+            print(f"Error adding user to ticket: {e}", file=sys.stderr)
+            traceback.print_exc()
+    else:
+        await ctx.send("❌ This command can only be used in ticket channels.")
+
+# --- Remove User from Ticket Command ---
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def remove(ctx, member: discord.Member):
+    """Removes a specified member from the current ticket channel."""
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    if ctx.channel.category and ctx.channel.category.name == "Tickets":
+        member_is_staff = any(role.id == STAFF_ROLE_ID for role in member.roles)
+        member_is_owner = any(role.id == OWNER_ROLE_ID for role in member.roles)
+
+        if member_is_staff or member_is_owner or TICKET_CREATOR.get(ctx.channel.id) == member.id:
+            await ctx.send("❌ You cannot remove a staff member, owner, or the original ticket creator from the ticket using this command.")
+            return
+
+        try:
+            await ctx.channel.set_permissions(member, read_messages=False, send_messages=False)
+            await ctx.send(f"✅ {member.mention} has been removed from this ticket.")
+            if log_channel:
+                embed = discord.Embed(
+                    title="➖ User Removed from Ticket",
+                    description=f"{member.mention} has been removed from {ctx.channel.mention}.",
+                    color=discord.Color.orange()
+                )
+                embed.add_field(name="Action By", value=ctx.author.mention, inline=True)
+                embed.add_field(name="Ticket Channel", value=ctx.channel.name, inline=True)
+                await log_channel.send(embed=embed)
+        except discord.Forbidden:
+            await ctx.send("❌ I don't have permission to remove users from this channel.")
+        except Exception as e:
+            await ctx.send(f"❌ An error occurred: {e}")
+            print(f"Error removing user from ticket: {e}", file=sys.stderr)
+            traceback.print_exc()
+    else:
+        await ctx.send("❌ This command can only be used in ticket channels.")
+
+# --- Transcript Function ---
+async def create_transcript(channel, closer, auto_closed=False):
+    """Creates a transcript of the ticket channel and sends it to the log channel."""
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    if not log_channel:
+        print("Log channel not found for transcript.")
+        return
+
+    if not bot.get_channel(channel.id):
+        print(f"Channel {channel.id} no longer exists, cannot create transcript.")
+        return
+
+    transcript_content = []
+    transcript_content.append(f"--- Ticket Transcript for #{channel.name} (ID: {channel.id}) ---")
+    ticket_creator_id_val = TICKET_CREATOR.get(channel.id)
+    if ticket_creator_id_val:
+        creator_member = channel.guild.get_member(ticket_creator_id_val)
+        creator_name = creator_member.display_name if creator_member else f"Unknown User (ID: {ticket_creator_id_val})"
+        transcript_content.append(f"Opened by: {creator_name} (ID: {ticket_creator_id_val})")
+    else:
+        transcript_content.append(f"Opened by: Unknown User (ID not found in TICKET_CREATOR)")
+
+    transcript_content.append(f"Closed by: {closer.name} (ID: {closer.id})")
+    transcript_content.append(f"Timestamp: {discord.utils.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}\n")
+
+    try:
+        async for msg in channel.history(limit=None, oldest_first=True):
+            attachments = "\n".join([f"Attachment: {att.url}" for att in msg.attachments])
+            embed_info = []
+            for embed in msg.embeds:
+                embed_title = f"Title: {embed.title}" if embed.title else "No Title"
+                embed_description = f"Description: {embed.description}" if embed.description else "No Description"
+                embed_url = f"URL: {embed.url}" if embed.url else "No URL"
+                embed_info.append(f"Embed: ({embed_title}, {embed_description}, {embed_url})")
+            embeds = "\n".join(embed_info)
+
+            content = f"[{msg.created_at.strftime('%Y-%m-%d %H:%M:%S')}] {msg.author.display_name} ({msg.author.id}): {msg.clean_content}"
+            if attachments:
+                content += f"\n{attachments}"
+            if embeds:
+                content += f"\n{embeds}"
+            transcript_content.append(content)
+
+        transcript_filename = f"transcript-{channel.name}-{channel.id}.txt"
+        with open(transcript_filename, 'w', encoding='utf-8') as f:
+            f.write("\n".join(transcript_content))
+
+        file = discord.File(transcript_filename)
+        ticket_creator_mention = f"<@{ticket_creator_id_val}>" if ticket_creator_id_val else "Unknown User"
+
+        embed = discord.Embed(
+            title=f"Ticket Transcript: #{channel.name}",
+            description=f"Ticket created by: {ticket_creator_mention}\nClosed by: {closer.mention}",
+            color=discord.Color.blue()
+        )
+        if auto_closed:
+            embed.add_field(name="Closure Type", value="Auto-Closed (Inactivity)", inline=True)
+        else:
+            embed.add_field(name="Closure Type", value="Manually Closed", inline=True)
+
+        await log_channel.send(embed=embed, file=file)
+        os.remove(transcript_filename)
+
+    except discord.Forbidden:
+        print(f"I don't have permission to read message history or send files in {log_channel.name}.")
+    except Exception as e:
+        print(f"Error creating or sending transcript for {channel.name}: {e}", file=sys.stderr)
+        traceback.print_exc()
+
+# --- Ping Ticket Creator Command ---
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def ping(ctx):
+    """Pings the creator of the current ticket."""
+    if ctx.channel.id in TICKET_CREATOR:
+        user_id = TICKET_CREATOR[ctx.channel.id]
+        user = ctx.guild.get_member(user_id)
+
+        if user is None:
+            try:
+                user = await bot.fetch_user(user_id)
+            except discord.NotFound:
+                await ctx.send("❌ The ticket creator could not be found.")
+                return
+            except Exception as e:
+                await ctx.send(f"❌ An error occurred while trying to fetch the user: {e}")
+                return
+
+        if user:
+            try:
+                await user.send(f"👋 {ctx.author.mention} asked you to check your ticket in {ctx.channel.mention}. Please review your ticket channel.")
+                await ctx.send(f"✅ DM sent to the ticket creator ({user.mention})!")
+            except discord.Forbidden:
+                await ctx.send("❌ I couldn't DM the user. They might have DMs disabled or blocked me.")
+            except Exception as e:
+                await ctx.send(f"❌ An error occurred while trying to DM the user: {e}")
+        else:
+            await ctx.send("❌ The ticket creator could not be found.")
+    else:
+        await ctx.send("❌ No ticket creator data found for this channel. This command must be used in a ticket channel.")
+
+# --- New General Ping Command ---
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def ticketping(ctx, member: discord.Member):
+    """Pings a specified member regarding the current ticket channel.
+    The user will receive a DM and a message in the ticket channel.
+    Usage: !ticketping <@user_mention>
+    """
+    if not ctx.channel.category or ctx.channel.category.name != "Tickets":
+        await ctx.send("❌ This command can only be used in ticket channels.")
+        return
+
+    try:
+        # DM the user
+        await member.send(
+            f"👋 {ctx.author.mention} from **{ctx.guild.name}** asked you to check the ticket "
+            f"{ctx.channel.mention}. Please review the ticket channel."
+        )
+        # Confirm in the ticket channel
+        await ctx.send(f"✅ DM sent to {member.mention} regarding this ticket!")
+    except discord.Forbidden:
+        await ctx.send(f"❌ I couldn't DM {member.mention}. They might have DMs disabled or blocked me.")
+    except Exception as e:
+        await ctx.send(f"❌ An error occurred while trying to ping {member.mention}: {e}")
+        print(f"Error pinging user {member.id} in ticket {ctx.channel.id}: {e}", file=sys.stderr)
+        traceback.print_exc()
+
+# --- Payment Commands (Simple link only) ---
+@bot.command()
+async def pp(ctx):
+    """Displays PayPal payment link only."""
+    await ctx.send(PAYMENT_METHODS["paypal"]["link"])
+
+@bot.command()
+async def cash(ctx):
+    """Displays Cash App payment link only."""
+    await ctx.send(PAYMENT_METHODS["cashapp"]["link"])
+
+@bot.command()
+async def ltc(ctx):
+    """Displays Litecoin address only."""
+    await ctx.send(PAYMENT_METHODS["litecoin"]["link"])
+
+@bot.command()
+async def sol(ctx):
+    """Displays Solana address only."""
+    await ctx.send(PAYMENT_METHODS["solana"]["link"])
+
+# --- Main Execution ---
+if __name__ == '__main__':
+    TOKEN = os.getenv("DISCORD_TOKEN")
+    if TOKEN:
+        try:
+            bot.run(TOKEN)
+        except discord.HTTPException as e:
+            if e.code == 40041:
+                print("Error: Invalid Discord bot token. Please check your DISCORD_TOKEN environment variable.")
+            else:
+                print(f"An HTTP error occurred: {e}", file=sys.stderr)
+                traceback.print_exc()
+        except Exception as e:
+            print(f"An unexpected error occurred during bot execution: {e}", file=sys.stderr)
+            traceback.print_exc()
+    else:
+        print("Error: DISCORD_TOKEN environment variable not set. Please set it before running the bot.")="✅ Ticket Closed and Deleted",
+                    description=f"Ticket `{interaction.channel.name}` has been closed and deleted.",
+                    color=discord.Color.green()
+                )
+                embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
+                embed.add_field(name="Closed By", value=interaction.user.mention, inline=True)
+                embed.add_field(name="Closure Method", value="Button + Auto-Delete", inline=True)
+                await log_channel.send(embed=embed)
+            
+            await interaction.channel.delete(reason=f"Ticket closed by {interaction.user.name} - auto-deleted after 10s countdown")
+            print(f"Closed and deleted ticket: {interaction.channel.name} ({interaction.channel.id}) by {interaction.user.name}")
+        else:
+            await interaction.response.send_message("You are not authorized to close this ticket.", ephemeral=True)
+    
+    async def payment_methods_callback(self, interaction: discord.Interaction):
+        """Handles the payment methods button click."""
+        embed = discord.Embed(
+            title="💳 Payment Methods",
+            description="Choose your preferred payment method below:",
+            color=discord.Color.blue()
+        )
+        
+        payment_view = PaymentMethodsView()
+        await interaction.response.send_message(embed=embed, view=payment_view, ephemeral=True)
 
 # --- Core Ticket Management Function ---
 async def create_new_ticket(guild: discord.Guild, user: discord.Member, category_id_key: str):
@@ -130,7 +498,7 @@ async def create_new_ticket(guild: discord.Guild, user: discord.Member, category
         TICKET_CREATOR[channel.id] = user.id
         save_ticket_data()
 
-        # Ticket initial message
+        # Ticket initial message (removed payment methods from embed)
         embed = discord.Embed(
             title=f"Welcome to your {category_label} Ticket!",
             description=(
@@ -140,82 +508,10 @@ async def create_new_ticket(guild: discord.Guild, user: discord.Member, category
             ),
             color=discord.Color.blue()
         )
-        embed.add_field(name="Payment Methods", value=(
-            f"**PayPal**: <:Paypal:1374290794340548619> (F&F)\n"
-            f"**Cash App**: <:PurpleCashApp:1374290682835107892>\n"
-            f"**Apple Pay**: <:Apple_Pay_Logo:1374291214983102474>\n"
-            f"**Zelle**: <:Zelle:1374291283329286194>\n"
-            f"**Litecoin (LTC)**: <:emojigg_ltc:1374291116966412348>"
-        ), inline=False)
         embed.set_footer(text="A staff member will assist you shortly. Thank you for your patience! 💙")
 
-        close_button = discord.ui.Button(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id="close_ticket_button", emoji="🔒")
-
-        async def close_callback(interaction: discord.Interaction):
-            # FIXED: Check if user has any of the required roles, not just top role
-            member = interaction.guild.get_member(interaction.user.id)
-            is_staff_or_owner = any(role.id in [STAFF_ROLE_ID, OWNER_ROLE_ID] for role in member.roles)
-            is_ticket_creator_user = TICKET_CREATOR.get(interaction.channel.id) == interaction.user.id
-
-            if is_ticket_creator_user or is_staff_or_owner:
-                if interaction.channel.id == channel.id:
-                    await interaction.response.send_message("🔒 Closing ticket... Starting countdown to deletion.", ephemeral=True)
-                    
-                    # Cancel auto-close timer
-                    task = ticket_timers.pop(channel.id, None)
-                    if task:
-                        task.cancel()
-                    
-                    # Create transcript before deletion
-                    await create_transcript(channel, interaction.user)
-                    
-                    # 10-second countdown
-                    countdown_embed = discord.Embed(
-                        title="🔒 Ticket Closed",
-                        description=f"This ticket has been closed by {interaction.user.mention}.\n\n**⏱️ Deleting in 10 seconds...**",
-                        color=discord.Color.red()
-                    )
-                    countdown_message = await channel.send(embed=countdown_embed)
-                    
-                    # Update countdown every second
-                    for i in range(9, 0, -1):
-                        await asyncio.sleep(1)
-                        countdown_embed.description = f"This ticket has been closed by {interaction.user.mention}.\n\n**⏱️ Deleting in {i} seconds...**"
-                        try:
-                            await countdown_message.edit(embed=countdown_embed)
-                        except:
-                            break  # Message might be deleted or channel gone
-                    
-                    await asyncio.sleep(1)
-                    
-                    # Final cleanup and deletion
-                    ticket_creator_id_val = TICKET_CREATOR.pop(channel.id, "Unknown")
-                    save_ticket_data()
-                    ticket_creator_mention = f"<@{ticket_creator_id_val}>" if ticket_creator_id_val != "Unknown" else "Unknown User"
-                    
-                    # Log the deletion
-                    if log_channel:
-                        embed = discord.Embed(
-                            title="✅ Ticket Closed and Deleted",
-                            description=f"Ticket `{channel.name}` has been closed and deleted.",
-                            color=discord.Color.green()
-                        )
-                        embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
-                        embed.add_field(name="Closed By", value=interaction.user.mention, inline=True)
-                        embed.add_field(name="Closure Method", value="Button + Auto-Delete", inline=True)
-                        await log_channel.send(embed=embed)
-                    
-                    await channel.delete(reason=f"Ticket closed by {interaction.user.name} - auto-deleted after 10s countdown")
-                    print(f"Closed and deleted ticket: {channel.name} ({channel.id}) by {interaction.user.name}")
-                else:
-                    await interaction.response.send_message("This button is for a different ticket.", ephemeral=True)
-            else:
-                await interaction.response.send_message("You are not authorized to close this ticket.", ephemeral=True)
-
-        close_button.callback = close_callback
-        ticket_view = discord.ui.View(timeout=None)
-        ticket_view.add_item(close_button)
-
+        # Create the ticket control view with close and payment buttons
+        ticket_view = TicketControlView()
         await channel.send(embed=embed, view=ticket_view)
 
         if log_channel:
@@ -554,215 +850,4 @@ async def add(ctx, member: discord.Member):
             await ctx.send(f"✅ {member.mention} has been added to this ticket.")
             if log_channel:
                 embed = discord.Embed(
-                    title="➕ User Added to Ticket",
-                    description=f"{member.mention} has been added to {ctx.channel.mention}.",
-                    color=discord.Color.blue()
-                )
-                embed.add_field(name="Action By", value=ctx.author.mention, inline=True)
-                embed.add_field(name="Ticket Channel", value=ctx.channel.name, inline=True)
-                await log_channel.send(embed=embed)
-        except discord.Forbidden:
-            await ctx.send("❌ I don't have permission to add users to this channel.")
-        except Exception as e:
-            await ctx.send(f"❌ An error occurred: {e}")
-            print(f"Error adding user to ticket: {e}", file=sys.stderr)
-            traceback.print_exc()
-    else:
-        await ctx.send("❌ This command can only be used in ticket channels.")
-
-# --- Remove User from Ticket Command ---
-@bot.command()
-@commands.has_permissions(manage_channels=True)
-async def remove(ctx, member: discord.Member):
-    """Removes a specified member from the current ticket channel."""
-    log_channel = bot.get_channel(LOG_CHANNEL_ID)
-    if ctx.channel.category and ctx.channel.category.name == "Tickets":
-        member_is_staff = any(role.id == STAFF_ROLE_ID for role in member.roles)
-        member_is_owner = any(role.id == OWNER_ROLE_ID for role in member.roles)
-
-        if member_is_staff or member_is_owner or TICKET_CREATOR.get(ctx.channel.id) == member.id:
-            await ctx.send("❌ You cannot remove a staff member, owner, or the original ticket creator from the ticket using this command.")
-            return
-
-        try:
-            await ctx.channel.set_permissions(member, read_messages=False, send_messages=False)
-            await ctx.send(f"✅ {member.mention} has been removed from this ticket.")
-            if log_channel:
-                embed = discord.Embed(
-                    title="➖ User Removed from Ticket",
-                    description=f"{member.mention} has been removed from {ctx.channel.mention}.",
-                    color=discord.Color.orange()
-                )
-                embed.add_field(name="Action By", value=ctx.author.mention, inline=True)
-                embed.add_field(name="Ticket Channel", value=ctx.channel.name, inline=True)
-                await log_channel.send(embed=embed)
-        except discord.Forbidden:
-            await ctx.send("❌ I don't have permission to remove users from this channel.")
-        except Exception as e:
-            await ctx.send(f"❌ An error occurred: {e}")
-            print(f"Error removing user from ticket: {e}", file=sys.stderr)
-            traceback.print_exc()
-    else:
-        await ctx.send("❌ This command can only be used in ticket channels.")
-
-# --- Transcript Function ---
-async def create_transcript(channel, closer, auto_closed=False):
-    """Creates a transcript of the ticket channel and sends it to the log channel."""
-    log_channel = bot.get_channel(LOG_CHANNEL_ID)
-    if not log_channel:
-        print("Log channel not found for transcript.")
-        return
-
-    if not bot.get_channel(channel.id):
-        print(f"Channel {channel.id} no longer exists, cannot create transcript.")
-        return
-
-    transcript_content = []
-    transcript_content.append(f"--- Ticket Transcript for #{channel.name} (ID: {channel.id}) ---")
-    ticket_creator_id_val = TICKET_CREATOR.get(channel.id)
-    if ticket_creator_id_val:
-        creator_member = channel.guild.get_member(ticket_creator_id_val)
-        creator_name = creator_member.display_name if creator_member else f"Unknown User (ID: {ticket_creator_id_val})"
-        transcript_content.append(f"Opened by: {creator_name} (ID: {ticket_creator_id_val})")
-    else:
-        transcript_content.append(f"Opened by: Unknown User (ID not found in TICKET_CREATOR)")
-
-    transcript_content.append(f"Closed by: {closer.name} (ID: {closer.id})")
-    transcript_content.append(f"Timestamp: {discord.utils.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}\n")
-
-    try:
-        async for msg in channel.history(limit=None, oldest_first=True):
-            attachments = "\n".join([f"Attachment: {att.url}" for att in msg.attachments])
-            embed_info = []
-            for embed in msg.embeds:
-                embed_title = f"Title: {embed.title}" if embed.title else "No Title"
-                embed_description = f"Description: {embed.description}" if embed.description else "No Description"
-                embed_url = f"URL: {embed.url}" if embed.url else "No URL"
-                embed_info.append(f"Embed: ({embed_title}, {embed_description}, {embed_url})")
-            embeds = "\n".join(embed_info)
-
-            content = f"[{msg.created_at.strftime('%Y-%m-%d %H:%M:%S')}] {msg.author.display_name} ({msg.author.id}): {msg.clean_content}"
-            if attachments:
-                content += f"\n{attachments}"
-            if embeds:
-                content += f"\n{embeds}"
-            transcript_content.append(content)
-
-        transcript_filename = f"transcript-{channel.name}-{channel.id}.txt"
-        with open(transcript_filename, 'w', encoding='utf-8') as f:
-            f.write("\n".join(transcript_content))
-
-        file = discord.File(transcript_filename)
-        ticket_creator_mention = f"<@{ticket_creator_id_val}>" if ticket_creator_id_val else "Unknown User"
-
-        embed = discord.Embed(
-            title=f"Ticket Transcript: #{channel.name}",
-            description=f"Ticket created by: {ticket_creator_mention}\nClosed by: {closer.mention}",
-            color=discord.Color.blue()
-        )
-        if auto_closed:
-            embed.add_field(name="Closure Type", value="Auto-Closed (Inactivity)", inline=True)
-        else:
-            embed.add_field(name="Closure Type", value="Manually Closed", inline=True)
-
-        await log_channel.send(embed=embed, file=file)
-        os.remove(transcript_filename)
-
-    except discord.Forbidden:
-        print(f"I don't have permission to read message history or send files in {log_channel.name}.")
-    except Exception as e:
-        print(f"Error creating or sending transcript for {channel.name}: {e}", file=sys.stderr)
-        traceback.print_exc()
-
-# --- Ping Ticket Creator Command ---
-@bot.command()
-@commands.has_permissions(manage_channels=True)
-async def ping(ctx):
-    """Pings the creator of the current ticket."""
-    if ctx.channel.id in TICKET_CREATOR:
-        user_id = TICKET_CREATOR[ctx.channel.id]
-        user = ctx.guild.get_member(user_id)
-
-        if user is None:
-            try:
-                user = await bot.fetch_user(user_id)
-            except discord.NotFound:
-                await ctx.send("❌ The ticket creator could not be found.")
-                return
-            except Exception as e:
-                await ctx.send(f"❌ An error occurred while trying to fetch the user: {e}")
-                return
-
-        if user:
-            try:
-                await user.send(f"👋 {ctx.author.mention} asked you to check your ticket in {ctx.channel.mention}. Please review your ticket channel.")
-                await ctx.send(f"✅ DM sent to the ticket creator ({user.mention})!")
-            except discord.Forbidden:
-                await ctx.send("❌ I couldn't DM the user. They might have DMs disabled or blocked me.")
-            except Exception as e:
-                await ctx.send(f"❌ An error occurred while trying to DM the user: {e}")
-        else:
-            await ctx.send("❌ The ticket creator could not be found.")
-    else:
-        await ctx.send("❌ No ticket creator data found for this channel. This command must be used in a ticket channel.")
-
-# --- New General Ping Command ---
-@bot.command()
-@commands.has_permissions(manage_channels=True)
-async def ticketping(ctx, member: discord.Member):
-    """Pings a specified member regarding the current ticket channel.
-    The user will receive a DM and a message in the ticket channel.
-    Usage: !ticketping <@user_mention>
-    """
-    if not ctx.channel.category or ctx.channel.category.name != "Tickets":
-        await ctx.send("❌ This command can only be used in ticket channels.")
-        return
-
-    try:
-        # DM the user
-        await member.send(
-            f"👋 {ctx.author.mention} from **{ctx.guild.name}** asked you to check the ticket "
-            f"{ctx.channel.mention}. Please review the ticket channel."
-        )
-        # Confirm in the ticket channel
-        await ctx.send(f"✅ DM sent to {member.mention} regarding this ticket!")
-    except discord.Forbidden:
-        await ctx.send(f"❌ I couldn't DM {member.mention}. They might have DMs disabled or blocked me.")
-    except Exception as e:
-        await ctx.send(f"❌ An error occurred while trying to ping {member.mention}: {e}")
-        print(f"Error pinging user {member.id} in ticket {ctx.channel.id}: {e}", file=sys.stderr)
-        traceback.print_exc()
-
-# --- Payment Commands ---
-@bot.command()
-async def pp(ctx):
-    """Displays PayPal payment information."""
-    await ctx.send("💸 **PayPal**: https://www.paypal.com/paypalme/Hunter393?country.x=US&locale.x=en_US")
-
-@bot.command()
-async def cash(ctx):
-    """Displays Cash App payment information."""
-    await ctx.send("💸 **Cash App**: https://cash.app/$Tripussy")
-
-@bot.command()
-async def ltc(ctx):
-    """Displays Litecoin payment information."""
-    await ctx.send("LeYqdR1y6EEASgV2Uf5oc1ABkeAHaMmjXx")
-
-# --- Main Execution ---
-if __name__ == '__main__':
-    TOKEN = os.getenv("DISCORD_TOKEN")
-    if TOKEN:
-        try:
-            bot.run(TOKEN)
-        except discord.HTTPException as e:
-            if e.code == 40041:
-                print("Error: Invalid Discord bot token. Please check your DISCORD_TOKEN environment variable.")
-            else:
-                print(f"An HTTP error occurred: {e}", file=sys.stderr)
-                traceback.print_exc()
-        except Exception as e:
-            print(f"An unexpected error occurred during bot execution: {e}", file=sys.stderr)
-            traceback.print_exc()
-    else:
-        print("Error: DISCORD_TOKEN environment variable not set. Please set it before running the bot.")
+                    title
