@@ -102,14 +102,16 @@ class PaymentMethodsView(discord.ui.View):
                 custom_id=f"payment_{method_id}"
             )
             
-            # Add callback to show payment link
-            async def payment_callback(interaction, method=method_data):
-                await interaction.response.send_message(
-                    method['link'], 
-                    ephemeral=True
-                )
-            button.callback = payment_callback
-                
+            # Create a proper callback function with closure
+            def make_callback(method_link):
+                async def payment_callback(interaction):
+                    await interaction.response.send_message(
+                        method_link, 
+                        ephemeral=True
+                    )
+                return payment_callback
+            
+            button.callback = make_callback(method_data["link"])
             self.add_item(button)
 
 # --- Ticket Control View ---
