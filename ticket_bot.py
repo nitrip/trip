@@ -397,6 +397,232 @@ async def setup(ctx):
         print(f"Error during setup command: {e}", file=sys.stderr)
         traceback.print_exc()
 
+# --- Premium Upgrade Form Modal ---
+class PremiumUpgradeModal(discord.ui.Modal):
+    """Modal form for premium upgrade ticket details."""
+    
+    def __init__(self):
+        super().__init__(title="Premium Upgrade Details")
+        
+        # Service type
+        self.service_type = discord.ui.TextInput(
+            label="Service (YouTube or Spotify)",
+            placeholder="Enter YouTube or Spotify",
+            min_length=5,
+            max_length=10,
+            required=True
+        )
+        self.add_item(self.service_type)
+        
+        # Payment method
+        self.payment_method = discord.ui.TextInput(
+            label="Payment Method",
+            placeholder="PayPal, Cash App, Litecoin, Solana, or Other",
+            min_length=3,
+            max_length=30,
+            required=True
+        )
+        self.add_item(self.payment_method)
+        
+        # Additional details
+        self.additional_details = discord.ui.TextInput(
+            label="Additional Details (Optional)",
+            placeholder="Any specific requirements or questions...",
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=500
+        )
+        self.add_item(self.additional_details)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Validate service type
+        service = self.service_type.value.lower().strip()
+        if "youtube" in service:
+            service_formatted = "YouTube Premium"
+        elif "spotify" in service:
+            service_formatted = "Spotify Premium"
+        else:
+            await interaction.response.send_message("❌ Please specify either 'YouTube' or 'Spotify'.", ephemeral=True)
+            return
+        
+        # Create the ticket
+        guild = interaction.guild
+        user = interaction.user
+        
+        channel, error_message = await create_new_ticket(guild, user, "premium")
+        
+        if channel:
+            # Send the form details to the ticket channel
+            details_embed = discord.Embed(
+                title="<:Aired:1378505206182051850> Premium Upgrade Request Details",
+                color=discord.Color.blue()
+            )
+            details_embed.add_field(name="Service", value=service_formatted, inline=True)
+            details_embed.add_field(name="Payment Method", value=self.payment_method.value, inline=True)
+            details_embed.add_field(name="Requested By", value=user.mention, inline=True)
+            
+            if self.additional_details.value:
+                details_embed.add_field(name="Additional Details", value=self.additional_details.value, inline=False)
+            
+            await channel.send(embed=details_embed)
+            await interaction.response.send_message(f"✅ Your premium upgrade ticket has been opened: {channel.mention}", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ {error_message}", ephemeral=True)
+
+# --- Server Boost Form Modal ---
+class ServerBoostModal(discord.ui.Modal):
+    """Modal form for server boost ticket details."""
+    
+    def __init__(self):
+        super().__init__(title="Server Boost Details")
+        
+        # Boost duration
+        self.boost_duration = discord.ui.TextInput(
+            label="Boost Duration (1 or 3 months)",
+            placeholder="Enter 1 or 3",
+            min_length=1,
+            max_length=1,
+            required=True
+        )
+        self.add_item(self.boost_duration)
+        
+        # Payment method
+        self.payment_method = discord.ui.TextInput(
+            label="Payment Method",
+            placeholder="PayPal, Cash App, Litecoin, Solana, or Other",
+            min_length=3,
+            max_length=30,
+            required=True
+        )
+        self.add_item(self.payment_method)
+        
+        # Server link (optional)
+        self.server_link = discord.ui.TextInput(
+            label="Server Link (Optional)",
+            placeholder="https://discord.gg/yourserver or leave blank",
+            required=False,
+            max_length=200
+        )
+        self.add_item(self.server_link)
+        
+        # Additional details
+        self.additional_details = discord.ui.TextInput(
+            label="Additional Details (Optional)",
+            placeholder="Any specific requirements or questions...",
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=500
+        )
+        self.add_item(self.additional_details)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Validate boost duration
+        duration = self.boost_duration.value.strip()
+        if duration not in ["1", "3"]:
+            await interaction.response.send_message("❌ Please enter either 1 or 3 for boost duration.", ephemeral=True)
+            return
+        
+        duration_text = f"{duration} month{'s' if duration == '3' else ''}"
+        
+        # Create the ticket
+        guild = interaction.guild
+        user = interaction.user
+        
+        channel, error_message = await create_new_ticket(guild, user, "boosts")
+        
+        if channel:
+            # Send the form details to the ticket channel
+            details_embed = discord.Embed(
+                title="<:Aired:1378505206182051850> Server Boost Request Details",
+                color=discord.Color.blue()
+            )
+            details_embed.add_field(name="Boost Duration", value=duration_text, inline=True)
+            details_embed.add_field(name="Payment Method", value=self.payment_method.value, inline=True)
+            details_embed.add_field(name="Requested By", value=user.mention, inline=True)
+            
+            if self.server_link.value:
+                details_embed.add_field(name="Server Link", value=self.server_link.value, inline=False)
+            
+            if self.additional_details.value:
+                details_embed.add_field(name="Additional Details", value=self.additional_details.value, inline=False)
+            
+            await channel.send(embed=details_embed)
+            await interaction.response.send_message(f"✅ Your server boost ticket has been opened: {channel.mention}", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ {error_message}", ephemeral=True)
+
+# --- Claims Form Modal ---
+class ClaimsModal(discord.ui.Modal):
+    """Modal form for claims/credits ticket details."""
+    
+    def __init__(self):
+        super().__init__(title="Claims/Credits Details")
+        
+        # Number of claims
+        self.claims_count = discord.ui.TextInput(
+            label="How many claims do you need?",
+            placeholder="Enter number (e.g., 5)",
+            min_length=1,
+            max_length=10,
+            required=True
+        )
+        self.add_item(self.claims_count)
+        
+        # Payment method
+        self.payment_method = discord.ui.TextInput(
+            label="Payment Method",
+            placeholder="PayPal, Cash App, Litecoin, Solana, or Other",
+            min_length=3,
+            max_length=30,
+            required=True
+        )
+        self.add_item(self.payment_method)
+        
+        # Additional details
+        self.additional_details = discord.ui.TextInput(
+            label="Additional Details (Optional)",
+            placeholder="Any specific requirements or questions...",
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=500
+        )
+        self.add_item(self.additional_details)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Validate claims count
+        try:
+            claims_num = int(self.claims_count.value)
+            if claims_num <= 0:
+                await interaction.response.send_message("❌ Please enter a valid number of claims (greater than 0).", ephemeral=True)
+                return
+        except ValueError:
+            await interaction.response.send_message("❌ Please enter a valid number for claims.", ephemeral=True)
+            return
+        
+        # Create the ticket
+        guild = interaction.guild
+        user = interaction.user
+        
+        channel, error_message = await create_new_ticket(guild, user, "claims")
+        
+        if channel:
+            # Send the form details to the ticket channel
+            details_embed = discord.Embed(
+                title="<:Aired:1378505206182051850> Claims/Credits Request Details",
+                color=discord.Color.blue()
+            )
+            details_embed.add_field(name="Number of Claims", value=str(claims_num), inline=True)
+            details_embed.add_field(name="Payment Method", value=self.payment_method.value, inline=True)
+            details_embed.add_field(name="Requested By", value=user.mention, inline=True)
+            
+            if self.additional_details.value:
+                details_embed.add_field(name="Additional Details", value=self.additional_details.value, inline=False)
+            
+            await channel.send(embed=details_embed)
+            await interaction.response.send_message(f"✅ Your claims/credits ticket has been opened: {channel.mention}", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ {error_message}", ephemeral=True)
+
 # --- Aged Account Form Modal ---
 class AgedAccountModal(discord.ui.Modal):
     """Modal form for aged account ticket details."""
@@ -492,9 +718,21 @@ async def on_interaction(interaction):
             await interaction.response.send_message("This action can only be performed in a server.", ephemeral=True)
             return
 
-        # Special handling for aged accounts category
+        # Special handling for specific categories with forms
         if category_id_key == "aged_acc":
             modal = AgedAccountModal()
+            await interaction.response.send_modal(modal)
+            return
+        elif category_id_key == "claims":
+            modal = ClaimsModal()
+            await interaction.response.send_modal(modal)
+            return
+        elif category_id_key == "boosts":
+            modal = ServerBoostModal()
+            await interaction.response.send_modal(modal)
+            return
+        elif category_id_key == "premium":
+            modal = PremiumUpgradeModal()
             await interaction.response.send_modal(modal)
             return
         
