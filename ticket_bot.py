@@ -62,6 +62,19 @@ intents.message_content = True
 intents.members = True  # Required for fetching members and their roles reliably
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# --- Helper function to update bot status ---
+async def update_bot_status():
+    """Updates the bot's status to show how many tickets it's watching."""
+    ticket_count = len(TICKET_CREATOR)
+    if ticket_count == 0:
+        activity = discord.Activity(type=discord.ActivityType.watching, name="for new tickets")
+    elif ticket_count == 1:
+        activity = discord.Activity(type=discord.ActivityType.watching, name="1 ticket")
+    else:
+        activity = discord.Activity(type=discord.ActivityType.watching, name=f"{ticket_count} tickets")
+    
+    await bot.change_presence(activity=activity)
+
 # --- Helper Functions for Persistence ---
 def load_ticket_data():
     """Loads ticket data from the JSON file into TICKET_CREATOR."""
@@ -85,6 +98,9 @@ def save_ticket_data():
         # Convert int keys (channel IDs) to string for JSON serialization
         json.dump({str(k): v for k, v in TICKET_CREATOR.items()}, f, indent=4)
         print(f"Saved ticket data: {TICKET_CREATOR}")
+    
+    # Update bot status after saving data
+    asyncio.create_task(update_bot_status())
 
 # --- Payment Methods View ---
 class PaymentMethodsView(discord.ui.View):
@@ -327,6 +343,10 @@ async def on_ready():
     """Event that fires when the bot is ready."""
     print(f'Bot {bot.user} is ready!')
     load_ticket_data()  # Load data on startup
+    
+    # Update bot status on startup
+    await update_bot_status()
+    
     # Re-launch auto-close timers for existing tickets
     for channel_id, creator_id in TICKET_CREATOR.items():
         guild_id = None
@@ -1135,6 +1155,48 @@ async def ticketping(ctx, member: discord.Member):
         await ctx.send(f"❌ An error occurred while trying to ping {member.mention}: {e}")
         print(f"Error pinging user {member.id} in ticket {ctx.channel.id}: {e}", file=sys.stderr)
         traceback.print_exc()
+
+# --- Ticket Statistics Command ---
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def ticketstats(ctx):
+    """Displays current ticket statistics and what the bot is monitoring."""
+    active_tickets = len(TICKET_CREATOR)
+    active_timers = len(ticket_timers)
+    
+    embed = discord.Embed(
+        title="🎫 Ticket System Statistics",
+        color=discord.Color.blue()
+    )
+    
+    embed.add_field(name="Active Tickets", value=str(active_tickets), inline=True)
+    embed.add_field(name="Active Timers", value=str(active_timers), inline=True)
+    embed.add_field(name="Auto-Close Time", value=f"{AUTO_CLOSE_TIME // 60} minutes", inline=True)
+    
+    if active_tickets > 0:
+        ticket_list = []
+        for channel_id, creator_id in TICKET_CREATOR.items():
+            channel = bot.get_channel(channel_id)
+            if channel:
+                creator = channel.guild.get_member(creator_id)
+                creator_name = creator.display_name if creator else f"Unknown (ID: {creator_id})"
+                ticket_list.append(f"• {channel.mention} - {creator_name}")
+            else:
+                ticket_list.append(f"• Channel {channel_id} - Not Found")
+        
+        # Limit to first 10 tickets to avoid embed limits
+        if len(ticket_list) > 10:
+            ticket_list = ticket_list[:10]
+            ticket_list.append(f"... and {len(TICKET_CREATOR) - 10} more")
+        
+        embed.add_field(
+            name="Current Tickets", 
+            value="\n".join(ticket_list) if ticket_list else "None", 
+            inline=False
+        )
+    
+    embed.set_footer(text=f"Bot monitoring {active_tickets} ticket{'s' if active_tickets != 1 else ''}")
+    await ctx.send(embed=embed)
 
 # --- Payment Commands (Simple link only) ---
 @bot.command()
