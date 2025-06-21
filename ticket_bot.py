@@ -408,9 +408,8 @@ class PremiumUpgradeModal(discord.ui.Modal):
         self.service_type = discord.ui.TextInput(
             label="Service (YouTube or Spotify)",
             placeholder="Enter YouTube or Spotify",
-            min_length=5,
-            max_length=10,
-            required=True
+            required=False,
+            max_length=50
         )
         self.add_item(self.service_type)
         
@@ -418,9 +417,8 @@ class PremiumUpgradeModal(discord.ui.Modal):
         self.payment_method = discord.ui.TextInput(
             label="Payment Method",
             placeholder="PayPal, Cash App, Litecoin, Solana, or Other",
-            min_length=3,
-            max_length=30,
-            required=True
+            required=False,
+            max_length=50
         )
         self.add_item(self.payment_method)
         
@@ -435,16 +433,6 @@ class PremiumUpgradeModal(discord.ui.Modal):
         self.add_item(self.additional_details)
     
     async def on_submit(self, interaction: discord.Interaction):
-        # Validate service type
-        service = self.service_type.value.lower().strip()
-        if "youtube" in service:
-            service_formatted = "YouTube Premium"
-        elif "spotify" in service:
-            service_formatted = "Spotify Premium"
-        else:
-            await interaction.response.send_message("❌ Please specify either 'YouTube' or 'Spotify'.", ephemeral=True)
-            return
-        
         # Create the ticket
         guild = interaction.guild
         user = interaction.user
@@ -457,8 +445,20 @@ class PremiumUpgradeModal(discord.ui.Modal):
                 title="<:Aired:1378505206182051850> Premium Upgrade Request Details",
                 color=discord.Color.blue()
             )
-            details_embed.add_field(name="Service", value=service_formatted, inline=True)
-            details_embed.add_field(name="Payment Method", value=self.payment_method.value, inline=True)
+            
+            if self.service_type.value:
+                service = self.service_type.value.lower().strip()
+                if "youtube" in service:
+                    service_formatted = "YouTube Premium"
+                elif "spotify" in service:
+                    service_formatted = "Spotify Premium"
+                else:
+                    service_formatted = self.service_type.value
+                details_embed.add_field(name="Service", value=service_formatted, inline=True)
+            
+            if self.payment_method.value:
+                details_embed.add_field(name="Payment Method", value=self.payment_method.value, inline=True)
+            
             details_embed.add_field(name="Requested By", value=user.mention, inline=True)
             
             if self.additional_details.value:
@@ -480,9 +480,8 @@ class ServerBoostModal(discord.ui.Modal):
         self.boost_duration = discord.ui.TextInput(
             label="Boost Duration (1 or 3 months)",
             placeholder="Enter 1 or 3",
-            min_length=1,
-            max_length=1,
-            required=True
+            required=False,
+            max_length=10
         )
         self.add_item(self.boost_duration)
         
@@ -490,9 +489,8 @@ class ServerBoostModal(discord.ui.Modal):
         self.payment_method = discord.ui.TextInput(
             label="Payment Method",
             placeholder="PayPal, Cash App, Litecoin, Solana, or Other",
-            min_length=3,
-            max_length=30,
-            required=True
+            required=False,
+            max_length=50
         )
         self.add_item(self.payment_method)
         
@@ -516,14 +514,6 @@ class ServerBoostModal(discord.ui.Modal):
         self.add_item(self.additional_details)
     
     async def on_submit(self, interaction: discord.Interaction):
-        # Validate boost duration
-        duration = self.boost_duration.value.strip()
-        if duration not in ["1", "3"]:
-            await interaction.response.send_message("❌ Please enter either 1 or 3 for boost duration.", ephemeral=True)
-            return
-        
-        duration_text = f"{duration} month{'s' if duration == '3' else ''}"
-        
         # Create the ticket
         guild = interaction.guild
         user = interaction.user
@@ -536,8 +526,18 @@ class ServerBoostModal(discord.ui.Modal):
                 title="<:Aired:1378505206182051850> Server Boost Request Details",
                 color=discord.Color.blue()
             )
-            details_embed.add_field(name="Boost Duration", value=duration_text, inline=True)
-            details_embed.add_field(name="Payment Method", value=self.payment_method.value, inline=True)
+            
+            if self.boost_duration.value:
+                duration = self.boost_duration.value.strip()
+                if duration in ["1", "3"]:
+                    duration_text = f"{duration} month{'s' if duration == '3' else ''}"
+                else:
+                    duration_text = self.boost_duration.value
+                details_embed.add_field(name="Boost Duration", value=duration_text, inline=True)
+            
+            if self.payment_method.value:
+                details_embed.add_field(name="Payment Method", value=self.payment_method.value, inline=True)
+            
             details_embed.add_field(name="Requested By", value=user.mention, inline=True)
             
             if self.server_link.value:
@@ -562,9 +562,8 @@ class ClaimsModal(discord.ui.Modal):
         self.claims_count = discord.ui.TextInput(
             label="How many claims do you need?",
             placeholder="Enter number (e.g., 5)",
-            min_length=1,
-            max_length=10,
-            required=True
+            required=False,
+            max_length=10
         )
         self.add_item(self.claims_count)
         
@@ -572,9 +571,8 @@ class ClaimsModal(discord.ui.Modal):
         self.payment_method = discord.ui.TextInput(
             label="Payment Method",
             placeholder="PayPal, Cash App, Litecoin, Solana, or Other",
-            min_length=3,
-            max_length=30,
-            required=True
+            required=False,
+            max_length=50
         )
         self.add_item(self.payment_method)
         
@@ -589,16 +587,6 @@ class ClaimsModal(discord.ui.Modal):
         self.add_item(self.additional_details)
     
     async def on_submit(self, interaction: discord.Interaction):
-        # Validate claims count
-        try:
-            claims_num = int(self.claims_count.value)
-            if claims_num <= 0:
-                await interaction.response.send_message("❌ Please enter a valid number of claims (greater than 0).", ephemeral=True)
-                return
-        except ValueError:
-            await interaction.response.send_message("❌ Please enter a valid number for claims.", ephemeral=True)
-            return
-        
         # Create the ticket
         guild = interaction.guild
         user = interaction.user
@@ -611,8 +599,20 @@ class ClaimsModal(discord.ui.Modal):
                 title="<:Aired:1378505206182051850> Claims/Credits Request Details",
                 color=discord.Color.blue()
             )
-            details_embed.add_field(name="Number of Claims", value=str(claims_num), inline=True)
-            details_embed.add_field(name="Payment Method", value=self.payment_method.value, inline=True)
+            
+            if self.claims_count.value:
+                try:
+                    claims_num = int(self.claims_count.value)
+                    if claims_num > 0:
+                        details_embed.add_field(name="Number of Claims", value=str(claims_num), inline=True)
+                    else:
+                        details_embed.add_field(name="Number of Claims", value=self.claims_count.value, inline=True)
+                except ValueError:
+                    details_embed.add_field(name="Number of Claims", value=self.claims_count.value, inline=True)
+            
+            if self.payment_method.value:
+                details_embed.add_field(name="Payment Method", value=self.payment_method.value, inline=True)
+            
             details_embed.add_field(name="Requested By", value=user.mention, inline=True)
             
             if self.additional_details.value:
@@ -634,9 +634,8 @@ class AgedAccountModal(discord.ui.Modal):
         self.year_select = discord.ui.TextInput(
             label="Account Year (2015-2020)",
             placeholder="Enter the year (e.g., 2017)",
-            min_length=4,
-            max_length=4,
-            required=True
+            required=False,
+            max_length=10
         )
         self.add_item(self.year_select)
         
@@ -644,9 +643,8 @@ class AgedAccountModal(discord.ui.Modal):
         self.nitro_select = discord.ui.TextInput(
             label="Nitro Status",
             placeholder="Type 'with nitro' or 'without nitro'",
-            min_length=4,
-            max_length=20,
-            required=True
+            required=False,
+            max_length=50
         )
         self.add_item(self.nitro_select)
         
@@ -661,26 +659,6 @@ class AgedAccountModal(discord.ui.Modal):
         self.add_item(self.additional_details)
     
     async def on_submit(self, interaction: discord.Interaction):
-        # Validate year
-        try:
-            year = int(self.year_select.value)
-            if year < 2015 or year > 2020:
-                await interaction.response.send_message("❌ Please enter a valid year between 2015 and 2020.", ephemeral=True)
-                return
-        except ValueError:
-            await interaction.response.send_message("❌ Please enter a valid year (numbers only).", ephemeral=True)
-            return
-        
-        # Validate nitro status
-        nitro_status = self.nitro_select.value.lower().strip()
-        if "with" in nitro_status and "nitro" in nitro_status:
-            nitro_formatted = "With Nitro"
-        elif "without" in nitro_status and "nitro" in nitro_status:
-            nitro_formatted = "Without Nitro"
-        else:
-            await interaction.response.send_message("❌ Please specify either 'with nitro' or 'without nitro'.", ephemeral=True)
-            return
-        
         # Create the ticket
         guild = interaction.guild
         user = interaction.user
@@ -693,8 +671,27 @@ class AgedAccountModal(discord.ui.Modal):
                 title="<:emoji_1736873097239:1385896691642929243> Aged Account Request Details",
                 color=discord.Color.blue()
             )
-            details_embed.add_field(name="Account Year", value=str(year), inline=True)
-            details_embed.add_field(name="Nitro Status", value=nitro_formatted, inline=True)
+            
+            if self.year_select.value:
+                try:
+                    year = int(self.year_select.value)
+                    if 2015 <= year <= 2020:
+                        details_embed.add_field(name="Account Year", value=str(year), inline=True)
+                    else:
+                        details_embed.add_field(name="Account Year", value=self.year_select.value, inline=True)
+                except ValueError:
+                    details_embed.add_field(name="Account Year", value=self.year_select.value, inline=True)
+            
+            if self.nitro_select.value:
+                nitro_status = self.nitro_select.value.lower().strip()
+                if "with" in nitro_status and "nitro" in nitro_status:
+                    nitro_formatted = "With Nitro"
+                elif "without" in nitro_status and "nitro" in nitro_status:
+                    nitro_formatted = "Without Nitro"
+                else:
+                    nitro_formatted = self.nitro_select.value
+                details_embed.add_field(name="Nitro Status", value=nitro_formatted, inline=True)
+            
             details_embed.add_field(name="Requested By", value=user.mention, inline=True)
             
             if self.additional_details.value:
