@@ -102,6 +102,165 @@ def save_ticket_data():
     # Update bot status after saving data
     asyncio.create_task(update_bot_status())
 
+# --- Claims Form Modal ---
+class ClaimsModal(discord.ui.Modal):
+    """Modal form for claims/credits ticket details."""
+    
+    def __init__(self):
+        super().__init__(title="Claims/Credits Details")
+        
+        # Number of claims
+        self.claims_count = discord.ui.TextInput(
+            label="How many claims do you need?",
+            placeholder="Enter number (e.g., 5)",
+            required=False,
+            max_length=10
+        )
+        self.add_item(self.year_select)
+        
+        # Nitro status
+        self.nitro_select = discord.ui.TextInput(
+            label="Nitro Status",
+            placeholder="Type 'with nitro' or 'without nitro'",
+            required=False,
+            max_length=50
+        )
+        self.add_item(self.nitro_select)
+        
+        # Additional details
+        self.additional_details = discord.ui.TextInput(
+            label="Additional Details (Optional)",
+            placeholder="Any specific requirements or questions...",
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=500
+        )
+        self.add_item(self.additional_details)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Create combined welcome and details embed
+        details_embed = discord.Embed(
+            title=f"Welcome to your {CATEGORIES_DATA['aged_acc']['label']} Ticket!",
+            description=f"{interaction.user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist!\n\nPlease describe your issue or request in detail.",
+            color=discord.Color.blue()
+        )
+        
+        # Add form details if provided
+        form_fields = []
+        if self.year_select.value:
+            try:
+                year = int(self.year_select.value)
+                if 2015 <= year <= 2020:
+                    form_fields.append(f"<:Aired:1378505206182051850> **Account Year:** {year}")
+                else:
+                    form_fields.append(f"<:Aired:1378505206182051850> **Account Year:** {self.year_select.value}")
+            except ValueError:
+                form_fields.append(f"<:Aired:1378505206182051850> **Account Year:** {self.year_select.value}")
+        
+        if self.nitro_select.value:
+            nitro_status = self.nitro_select.value.lower().strip()
+            if "with" in nitro_status and "nitro" in nitro_status:
+                nitro_formatted = "With Nitro"
+            elif "without" in nitro_status and "nitro" in nitro_status:
+                nitro_formatted = "Without Nitro"
+            else:
+                nitro_formatted = self.nitro_select.value
+            form_fields.append(f"<:Aired:1378505206182051850> **Nitro Status:** {nitro_formatted}")
+        
+        if self.additional_details.value:
+            form_fields.append(f"<:Aired:1378505206182051850> **Additional Details:** {self.additional_details.value}")
+        
+        if form_fields:
+            details_embed.add_field(
+                name="Request Details",
+                value="\n\n".join(form_fields),
+                inline=False
+            )
+        
+        details_embed.set_footer(text="A staff member will assist you shortly. Thank you for your patience!")
+        
+        # Create the ticket without sending the default message
+        guild = interaction.guild
+        user = interaction.user
+        
+        # Check for existing tickets by the user within the specific category
+        for channel_id, creator_id in TICKET_CREATOR.items():
+            if creator_id == user.id:
+                existing_channel = guild.get_channel(channel_id)
+                if existing_channel and existing_channel.category and existing_channel.category.name == "Tickets":
+                    channel_name_parts = existing_channel.name.split('-')
+                    if channel_name_parts and channel_name_parts[0] == "aged_acc":
+                        await interaction.response.send_message(f"❌ You already have an open ticket in the 'Aged Accounts' category: {existing_channel.mention}. Please close that one first.", ephemeral=True)
+                        return
+
+        # Create the ticket channel manually
+        category_label = CATEGORIES_DATA['aged_acc']['label']
+        log_channel = bot.get_channel(LOG_CHANNEL_ID)
+        
+        # Find or create "Tickets" category
+        ticket_category = discord.utils.get(guild.categories, name="Tickets")
+        if ticket_category is None:
+            try:
+                ticket_category = await guild.create_category("Tickets", overwrites={
+                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                    guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                })
+            except discord.Forbidden:
+                await interaction.response.send_message("❌ I don't have permission to create categories. Please contact an administrator.", ephemeral=True)
+                return
+            except Exception as e:
+                await interaction.response.send_message(f"❌ An error occurred creating the ticket category: {e}", ephemeral=True)
+                return
+
+        # Create ticket channel
+        channel_name_base = f"aged_acc-{user.display_name}".replace(" ", "-").lower()
+        channel_name = channel_name_base
+        counter = 0
+        while discord.utils.get(ticket_category.channels, name=channel_name):
+            counter += 1
+            channel_name = f"{channel_name_base}-{counter}"
+
+        try:
+            channel = await ticket_category.create_text_channel(channel_name)
+
+            # Set permissions
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False),
+                user: discord.PermissionOverwrite(read_messages=True, send_messages=True, embed_links=True, attach_files=True),
+                guild.get_role(OWNER_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                guild.get_role(STAFF_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
+            }
+            await channel.edit(overwrites=overwrites)
+
+            TICKET_CREATOR[channel.id] = user.id
+            save_ticket_data()
+
+            # Send the combined welcome and form details embed
+            ticket_view = TicketControlView()
+            await channel.send(embed=details_embed, view=ticket_view)
+
+            if log_channel:
+                embed = discord.Embed(
+                    title="📂 Ticket Opened",
+                    description=f"A new ticket has been opened: {channel.mention}",
+                    color=discord.Color.green()
+                )
+                embed.add_field(name="Ticket Creator", value=user.mention, inline=True)
+                embed.add_field(name="Category", value=category_label, inline=True)
+                embed.add_field(name="Channel Name", value=channel.name, inline=False)
+                await log_channel.send(embed=embed)
+
+            # Start auto-close timer
+            task = asyncio.create_task(auto_close_ticket(channel.id, guild.id))
+            ticket_timers[channel.id] = task
+
+            await interaction.response.send_message(f"✅ Your aged account ticket has been opened: {channel.mention}", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ I don't have permission to create channels in that category or set permissions. Please contact an administrator.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ An unexpected error occurred: {e}", ephemeral=True)
+
 # --- Payment Methods View ---
 class PaymentMethodsView(discord.ui.View):
     """A view for displaying payment method buttons."""
@@ -171,877 +330,6 @@ class TicketControlView(discord.ui.View):
             
             # Create transcript before deletion
             await create_transcript(interaction.channel, interaction.user)
-            
-            # 10-second countdown
-            countdown_embed = discord.Embed(
-                title="🔒 Ticket Closed",
-                description=f"This ticket has been closed by {interaction.user.mention}.\n\n**⏱️ Deleting in 10 seconds...**",
-                color=discord.Color.red()
-            )
-            countdown_message = await interaction.channel.send(embed=countdown_embed)
-            
-            # Update countdown every second
-            for i in range(9, 0, -1):
-                await asyncio.sleep(1)
-                countdown_embed.description = f"This ticket has been closed by {interaction.user.mention}.\n\n**⏱️ Deleting in {i} seconds...**"
-                try:
-                    await countdown_message.edit(embed=countdown_embed)
-                except:
-                    break  # Message might be deleted or channel gone
-            
-            await asyncio.sleep(1)
-            
-            # Final cleanup and deletion
-            ticket_creator_id_val = TICKET_CREATOR.pop(interaction.channel.id, "Unknown")
-            save_ticket_data()
-            ticket_creator_mention = f"<@{ticket_creator_id_val}>" if ticket_creator_id_val != "Unknown" else "Unknown User"
-            
-            # Log the deletion
-            log_channel = bot.get_channel(LOG_CHANNEL_ID)
-            if log_channel:
-                embed = discord.Embed(
-                    title="✅ Ticket Closed and Deleted",
-                    description=f"Ticket `{interaction.channel.name}` has been closed and deleted.",
-                    color=discord.Color.green()
-                )
-                embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
-                embed.add_field(name="Closed By", value=interaction.user.mention, inline=True)
-                embed.add_field(name="Closure Method", value="Button + Auto-Delete", inline=True)
-                await log_channel.send(embed=embed)
-            
-            await interaction.channel.delete(reason=f"Ticket closed by {interaction.user.name} - auto-deleted after 10s countdown")
-            print(f"Closed and deleted ticket: {interaction.channel.name} ({interaction.channel.id}) by {interaction.user.name}")
-        else:
-            await interaction.response.send_message("You are not authorized to close this ticket.", ephemeral=True)
-    
-    async def payment_methods_callback(self, interaction: discord.Interaction):
-        """Handles the payment methods button click."""
-        embed = discord.Embed(
-            title="💳 Payment Methods",
-            description="Choose your preferred payment method below:",
-            color=discord.Color.blue()
-        )
-        
-        payment_view = PaymentMethodsView()
-        await interaction.response.send_message(embed=embed, view=payment_view, ephemeral=True)
-
-# --- Core Ticket Management Function ---
-async def create_new_ticket(guild: discord.Guild, user: discord.Member, category_id_key: str):
-    """
-    Handles the creation of a new ticket channel.
-
-    Args:
-        guild (discord.Guild): The guild where the ticket is being created.
-        user (discord.Member): The user for whom the ticket is being created.
-        category_id_key (str): The key from CATEGORIES_DATA for the ticket category.
-
-    Returns:
-        tuple: A tuple containing (discord.TextChannel, str) if successful,
-               otherwise (None, str) with an error message.
-    """
-    category_label = CATEGORIES_DATA[category_id_key]["label"]
-    log_channel = bot.get_channel(LOG_CHANNEL_ID)
-
-    # Check for existing tickets by the user within the specific category
-    for channel_id, creator_id in TICKET_CREATOR.items():
-        if creator_id == user.id:
-            existing_channel = guild.get_channel(channel_id)
-            if existing_channel and existing_channel.category and existing_channel.category.name == "Tickets":
-                channel_name_parts = existing_channel.name.split('-')
-                if channel_name_parts and channel_name_parts[0] == category_id_key:
-                    return None, f"You already have an open ticket in the '{category_label}' category: {existing_channel.mention}. Please close that one first."
-
-    # Find or create "Tickets" category
-    ticket_category = discord.utils.get(guild.categories, name="Tickets")
-    if ticket_category is None:
-        try:
-            ticket_category = await guild.create_category("Tickets", overwrites={
-                guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-            })
-            if log_channel:
-                embed = discord.Embed(
-                    title="🆕 New Ticket Category Created",
-                    description=f"Created new ticket category: {ticket_category.mention}",
-                    color=discord.Color.blue()
-                )
-                await log_channel.send(embed=embed)
-        except discord.Forbidden:
-            return None, "I don't have permission to create categories. Please contact an administrator."
-        except Exception as e:
-            print(f"Error creating ticket category: {e}", file=sys.stderr)
-            traceback.print_exc()
-            return None, f"An error occurred creating the ticket category: {e}"
-
-    # Create ticket channel
-    channel_name_base = f"{category_id_key}-{user.display_name}".replace(" ", "-").lower()
-    channel_name = channel_name_base
-    counter = 0
-    while discord.utils.get(ticket_category.channels, name=channel_name):
-        counter += 1
-        channel_name = f"{channel_name_base}-{counter}"
-
-    try:
-        channel = await ticket_category.create_text_channel(channel_name)
-
-        # Set permissions
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False),
-            user: discord.PermissionOverwrite(read_messages=True, send_messages=True, embed_links=True, attach_files=True),
-            guild.get_role(OWNER_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True),
-            guild.get_role(STAFF_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True),
-            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
-        }
-        await channel.edit(overwrites=overwrites)
-
-        TICKET_CREATOR[channel.id] = user.id
-        save_ticket_data()
-
-        # Ticket initial message
-        embed = discord.Embed(
-            title=f"Welcome to your {category_label} Ticket!",
-            description=(
-                f"{user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist!\n\n"
-                f"Please describe your issue or request in detail."
-            ),
-            color=discord.Color.blue()
-        )
-        embed.set_footer(text="A staff member will assist you shortly. Thank you for your patience!")
-
-        # Create the ticket control view with close and payment buttons
-        ticket_view = TicketControlView()
-        await channel.send(embed=embed, view=ticket_view)
-
-        if log_channel:
-            embed = discord.Embed(
-                title="📂 Ticket Opened",
-                description=f"A new ticket has been opened: {channel.mention}",
-                color=discord.Color.green()
-            )
-            embed.add_field(name="Ticket Creator", value=user.mention, inline=True)
-            embed.add_field(name="Category", value=category_label, inline=True)
-            embed.add_field(name="Channel Name", value=channel.name, inline=False)
-            await log_channel.send(embed=embed)
-
-        # Start auto-close timer
-        task = asyncio.create_task(auto_close_ticket(channel.id, guild.id))
-        ticket_timers[channel.id] = task
-
-        return channel, None
-
-    except discord.Forbidden:
-        return None, "I don't have permission to create channels in that category or set permissions. Please contact an administrator."
-    except Exception as e:
-        print(f"Error creating ticket channel: {e}", file=sys.stderr)
-        traceback.print_exc()
-        return None, f"An unexpected error occurred: {e}"
-
-# --- Bot Events ---
-@bot.event
-async def on_ready():
-    """Event that fires when the bot is ready."""
-    print(f'Bot {bot.user} is ready!')
-    load_ticket_data()  # Load data on startup
-    
-    # Update bot status on startup
-    await update_bot_status()
-    
-    # Re-launch auto-close timers for existing tickets
-    for channel_id, creator_id in TICKET_CREATOR.items():
-        guild_id = None
-        for guild in bot.guilds:
-            if guild.get_channel(channel_id):
-                guild_id = guild.id
-                break
-        if guild_id:
-            print(f"Restarting timer for ticket channel {channel_id} in guild {guild_id}")
-            task = asyncio.create_task(auto_close_ticket(channel_id, guild_id))
-            ticket_timers[channel_id] = task
-        else:
-            print(f"Could not find guild for channel {channel_id}. Skipping timer restart and cleaning up.")
-            TICKET_CREATOR.pop(channel_id, None)
-            save_ticket_data()
-
-@bot.event
-async def on_command_error(ctx, error):
-    """Global command error handler."""
-    if isinstance(error, commands.CommandNotFound):
-        await ctx.send("❌ That command does not exist. Please check your spelling.")
-    elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(f"❌ Missing a required argument: `{error.param.name}`.")
-    elif isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You don't have the necessary permissions to use this command.")
-    elif isinstance(error, commands.BadArgument):
-        await ctx.send(f"❌ Invalid argument provided: {error}")
-    elif isinstance(error, commands.NoPrivateMessage):
-        await ctx.send("❌ This command cannot be used in private messages.")
-    elif isinstance(error, commands.MemberNotFound):
-        await ctx.send("❌ Member not found. Please provide a valid user or ID.")
-    else:
-        print(f"Ignoring exception in command {ctx.command}:", file=sys.stderr)
-        traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
-        await ctx.send("An unexpected error occurred while running this command. Check the console for details.")
-
-# --- Setup Command ---
-@bot.command()
-@commands.has_permissions(manage_channels=True)
-async def setup(ctx):
-    """Sets up the ticket system message with category buttons."""
-    embed = discord.Embed(
-        title="Support Ticket System",
-        description=(
-            "Click on a category button below to open a new support ticket.\n"
-            f"Tickets will automatically close after {AUTO_CLOSE_TIME // 60} minutes of inactivity."
-        ),
-        color=discord.Color.purple()
-    )
-    view = discord.ui.View(timeout=None)
-
-    for custom_id, data in CATEGORIES_DATA.items():
-        button = discord.ui.Button(
-            label=data["label"],
-            custom_id=custom_id,
-            emoji=data["emoji_id"],
-            style=data["style"]
-        )
-        view.add_item(button)
-
-    try:
-        await ctx.send(embed=embed, view=view)
-        await ctx.message.delete()
-    except discord.Forbidden:
-        await ctx.author.send("I don't have permission to send messages in that channel or delete commands. Please check my permissions.")
-    except Exception as e:
-        await ctx.send(f"An error occurred during setup: {e}")
-        print(f"Error during setup command: {e}", file=sys.stderr)
-        traceback.print_exc()
-
-# --- Premium Upgrade Form Modal ---
-class PremiumUpgradeModal(discord.ui.Modal):
-    """Modal form for premium upgrade ticket details."""
-    
-    def __init__(self):
-        super().__init__(title="Premium Upgrade Details")
-        
-        # Service type
-        self.service_type = discord.ui.TextInput(
-            label="Service (YouTube or Spotify)",
-            placeholder="Enter YouTube or Spotify",
-            required=False,
-            max_length=50
-        )
-        self.add_item(self.service_type)
-        
-        # Payment method
-        self.payment_method = discord.ui.TextInput(
-            label="Payment Method",
-            placeholder="PayPal, Cash App, Litecoin, Solana, or Other",
-            required=False,
-            max_length=50
-        )
-        self.add_item(self.payment_method)
-        
-        # Additional details
-        self.additional_details = discord.ui.TextInput(
-            label="Additional Details (Optional)",
-            placeholder="Any specific requirements or questions...",
-            style=discord.TextStyle.paragraph,
-            required=False,
-            max_length=500
-        )
-        self.add_item(self.additional_details)
-    
-    async def on_submit(self, interaction: discord.Interaction):
-        # Create the ticket without sending the default message
-        guild = interaction.guild
-        user = interaction.user
-        
-        # Check for existing tickets by the user within the specific category
-        for channel_id, creator_id in TICKET_CREATOR.items():
-            if creator_id == user.id:
-                existing_channel = guild.get_channel(channel_id)
-                if existing_channel and existing_channel.category and existing_channel.category.name == "Tickets":
-                    channel_name_parts = existing_channel.name.split('-')
-                    if channel_name_parts and channel_name_parts[0] == "claims":
-                        await interaction.response.send_message(f"❌ You already have an open ticket in the 'Claims/Credits' category: {existing_channel.mention}. Please close that one first.", ephemeral=True)
-                        return
-
-        # Create the ticket channel manually
-        category_label = CATEGORIES_DATA['claims']['label']
-        log_channel = bot.get_channel(LOG_CHANNEL_ID)
-        
-        # Find or create "Tickets" category
-        ticket_category = discord.utils.get(guild.categories, name="Tickets")
-        if ticket_category is None:
-            try:
-                ticket_category = await guild.create_category("Tickets", overwrites={
-                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                    guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-                })
-            except discord.Forbidden:
-                await interaction.response.send_message("❌ I don't have permission to create categories. Please contact an administrator.", ephemeral=True)
-                return
-            except Exception as e:
-                await interaction.response.send_message(f"❌ An error occurred creating the ticket category: {e}", ephemeral=True)
-                return
-
-        # Create ticket channel
-        channel_name_base = f"claims-{user.display_name}".replace(" ", "-").lower()
-        channel_name = channel_name_base
-        counter = 0
-        while discord.utils.get(ticket_category.channels, name=channel_name):
-            counter += 1
-            channel_name = f"{channel_name_base}-{counter}"
-
-        try:
-            channel = await ticket_category.create_text_channel(channel_name)
-
-            # Set permissions
-            overwrites = {
-                guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False),
-                user: discord.PermissionOverwrite(read_messages=True, send_messages=True, embed_links=True, attach_files=True),
-                guild.get_role(OWNER_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                guild.get_role(STAFF_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
-            }
-            await channel.edit(overwrites=overwrites)
-
-            TICKET_CREATOR[channel.id] = user.id
-            save_ticket_data()
-
-            # Send the combined welcome and form details embed
-            ticket_view = TicketControlView()
-            await channel.send(embed=details_embed, view=ticket_view)
-
-            if log_channel:
-                embed = discord.Embed(
-                    title="📂 Ticket Opened",
-                    description=f"A new ticket has been opened: {channel.mention}",
-                    color=discord.Color.green()
-                )
-                embed.add_field(name="Ticket Creator", value=user.mention, inline=True)
-                embed.add_field(name="Category", value=category_label, inline=True)
-                embed.add_field(name="Channel Name", value=channel.name, inline=False)
-                await log_channel.send(embed=embed)
-
-            # Start auto-close timer
-            task = asyncio.create_task(auto_close_ticket(channel.id, guild.id))
-            ticket_timers[channel.id] = task
-        
-        channel, error_message = await create_new_ticket(guild, user, "premium")
-        
-        if channel:
-            # Create combined welcome and details embed
-            details_embed = discord.Embed(
-                title=f"Welcome to your {CATEGORIES_DATA['premium']['label']} Ticket!",
-                description=f"{user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist!\n\nPlease describe your issue or request in detail.",
-                color=discord.Color.blue()
-            )
-            
-            # Add form details if provided
-            form_fields = []
-            if self.service_type.value:
-                service = self.service_type.value.lower().strip()
-                if "youtube" in service:
-                    service_formatted = "YouTube Premium"
-                elif "spotify" in service:
-                    service_formatted = "Spotify Premium"
-                else:
-                    service_formatted = self.service_type.value
-                form_fields.append(f"<:Aired:1378505206182051850> **Service:** {service_formatted}")
-            
-            if self.payment_method.value:
-                form_fields.append(f"<:Aired:1378505206182051850> **Payment Method:** {self.payment_method.value}")
-            
-            if self.additional_details.value:
-                form_fields.append(f"<:Aired:1378505206182051850> **Additional Details:** {self.additional_details.value}")
-            
-            if form_fields:
-                details_embed.add_field(
-                    name="Request Details",
-                    value="\n\n".join(form_fields),
-                    inline=False
-                )
-            
-            details_embed.set_footer(text="A staff member will assist you shortly. Thank you for your patience!")
-            
-            # Create the ticket control view with close and payment buttons
-            ticket_view = TicketControlView()
-            await channel.send(embed=details_embed, view=ticket_view)
-            
-            await interaction.response.send_message(f"✅ Your premium upgrade ticket has been opened: {channel.mention}", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"❌ {error_message}", ephemeral=True)
-
-# --- Server Boost Form Modal ---
-class ServerBoostModal(discord.ui.Modal):
-    """Modal form for server boost ticket details."""
-    
-    def __init__(self):
-        super().__init__(title="Server Boost Details")
-        
-        # Boost duration
-        self.boost_duration = discord.ui.TextInput(
-            label="Boost Duration (1 or 3 months)",
-            placeholder="Enter 1 or 3",
-            required=False,
-            max_length=10
-        )
-        self.add_item(self.boost_duration)
-        
-        # Payment method
-        self.payment_method = discord.ui.TextInput(
-            label="Payment Method",
-            placeholder="PayPal, Cash App, Litecoin, Solana, or Other",
-            required=False,
-            max_length=50
-        )
-        self.add_item(self.payment_method)
-        
-        # Server link (optional)
-        self.server_link = discord.ui.TextInput(
-            label="Server Link (Optional)",
-            placeholder="https://discord.gg/yourserver or leave blank",
-            required=False,
-            max_length=200
-        )
-        self.add_item(self.server_link)
-        
-        # Additional details
-        self.additional_details = discord.ui.TextInput(
-            label="Additional Details (Optional)",
-            placeholder="Any specific requirements or questions...",
-            style=discord.TextStyle.paragraph,
-            required=False,
-            max_length=500
-        )
-        self.add_item(self.additional_details)
-    
-    async def on_submit(self, interaction: discord.Interaction):
-        # Create the ticket
-        guild = interaction.guild
-        user = interaction.user
-        
-        channel, error_message = await create_new_ticket(guild, user, "boosts")
-        
-        if channel:
-            # Create combined welcome and details embed
-            details_embed = discord.Embed(
-                title=f"Welcome to your {CATEGORIES_DATA['boosts']['label']} Ticket!",
-                description=f"{user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist!\n\nPlease describe your issue or request in detail.",
-                color=discord.Color.blue()
-            )
-            
-            # Add form details if provided
-            form_fields = []
-            if self.boost_duration.value:
-                duration = self.boost_duration.value.strip()
-                if duration in ["1", "3"]:
-                    duration_text = f"{duration} month{'s' if duration == '3' else ''}"
-                else:
-                    duration_text = self.boost_duration.value
-                form_fields.append(f"<:Aired:1378505206182051850> **Boost Duration:** {duration_text}")
-            
-            if self.payment_method.value:
-                form_fields.append(f"<:Aired:1378505206182051850> **Payment Method:** {self.payment_method.value}")
-            
-            if self.server_link.value:
-                form_fields.append(f"<:Aired:1378505206182051850> **Server Link:** {self.server_link.value}")
-            
-            if self.additional_details.value:
-                form_fields.append(f"<:Aired:1378505206182051850> **Additional Details:** {self.additional_details.value}")
-            
-            if form_fields:
-                details_embed.add_field(
-                    name="Request Details",
-                    value="\n\n".join(form_fields),
-                    inline=False
-                )
-            
-            details_embed.set_footer(text="A staff member will assist you shortly. Thank you for your patience!")
-            
-            # Create the ticket control view with close and payment buttons
-            ticket_view = TicketControlView()
-            await channel.send(embed=details_embed, view=ticket_view)
-            
-            await interaction.response.send_message(f"✅ Your server boost ticket has been opened: {channel.mention}", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"❌ {error_message}", ephemeral=True)
-
-# --- Claims Form Modal ---
-class ClaimsModal(discord.ui.Modal):
-    """Modal form for claims/credits ticket details."""
-    
-    def __init__(self):
-        super().__init__(title="Claims/Credits Details")
-        
-        # Number of claims
-        self.claims_count = discord.ui.TextInput(
-            label="How many claims do you need?",
-            placeholder="Enter number (e.g., 5)",
-            required=False,
-            max_length=10
-        )
-        self.add_item(self.claims_count)
-        
-        # Payment method
-        self.payment_method = discord.ui.TextInput(
-            label="Payment Method",
-            placeholder="PayPal, Cash App, Litecoin, Solana, or Other",
-            required=False,
-            max_length=50
-        )
-        self.add_item(self.payment_method)
-        
-        # Additional details
-        self.additional_details = discord.ui.TextInput(
-            label="Additional Details (Optional)",
-            placeholder="Any specific requirements or questions...",
-            style=discord.TextStyle.paragraph,
-            required=False,
-            max_length=500
-        )
-        self.add_item(self.additional_details)
-    
-    async def on_submit(self, interaction: discord.Interaction):
-        # Create the ticket
-        guild = interaction.guild
-        user = interaction.user
-        
-        channel, error_message = await create_new_ticket_with_embed(guild, user, "claims", details_embed, ticket_view)
-        
-        if channel:
-            # Create combined welcome and details embed
-            details_embed = discord.Embed(
-                title=f"Welcome to your {CATEGORIES_DATA['claims']['label']} Ticket!",
-                description=f"{user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist!\n\nPlease describe your issue or request in detail.",
-                color=discord.Color.blue()
-            )
-            
-            # Add form details if provided
-            form_fields = []
-            if self.claims_count.value:
-                try:
-                    claims_num = int(self.claims_count.value)
-                    if claims_num > 0:
-                        form_fields.append(f"<:Aired:1378505206182051850> **Number of Claims:** {claims_num}")
-                    else:
-                        form_fields.append(f"<:Aired:1378505206182051850> **Number of Claims:** {self.claims_count.value}")
-                except ValueError:
-                    form_fields.append(f"<:Aired:1378505206182051850> **Number of Claims:** {self.claims_count.value}")
-            
-            if self.payment_method.value:
-                form_fields.append(f"<:Aired:1378505206182051850> **Payment Method:** {self.payment_method.value}")
-            
-            if self.additional_details.value:
-                form_fields.append(f"<:Aired:1378505206182051850> **Additional Details:** {self.additional_details.value}")
-            
-            if form_fields:
-                details_embed.add_field(
-                    name="Request Details",
-                    value="\n\n".join(form_fields),
-                    inline=False
-                )
-            
-            details_embed.set_footer(text="A staff member will assist you shortly. Thank you for your patience!")
-            
-            # Create the ticket control view with close and payment buttons
-            ticket_view = TicketControlView()
-            await channel.send(embed=details_embed, view=ticket_view)
-            
-            await interaction.response.send_message(f"✅ Your claims/credits ticket has been opened: {channel.mention}", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"❌ {error_message}", ephemeral=True)
-
-# --- Aged Account Form Modal ---
-class AgedAccountModal(discord.ui.Modal):
-    """Modal form for aged account ticket details."""
-    
-    def __init__(self):
-        super().__init__(title="Aged Account Details")
-        
-        # Year selection
-        self.year_select = discord.ui.TextInput(
-            label="Account Year (2015-2020)",
-            placeholder="Enter the year (e.g., 2017)",
-            required=False,
-            max_length=10
-        )
-        self.add_item(self.year_select)
-        
-        # Nitro status
-        self.nitro_select = discord.ui.TextInput(
-            label="Nitro Status",
-            placeholder="Type 'with nitro' or 'without nitro'",
-            required=False,
-            max_length=50
-        )
-        self.add_item(self.nitro_select)
-        
-        # Additional details
-        self.additional_details = discord.ui.TextInput(
-            label="Additional Details (Optional)",
-            placeholder="Any specific requirements or questions...",
-            style=discord.TextStyle.paragraph,
-            required=False,
-            max_length=500
-        )
-        self.add_item(self.additional_details)
-    
-    async def on_submit(self, interaction: discord.Interaction):
-        # Create the ticket
-        guild = interaction.guild
-        user = interaction.user
-        
-        channel, error_message = await create_new_ticket(guild, user, "aged_acc")
-        
-        if channel:
-            # Create combined welcome and details embed
-            details_embed = discord.Embed(
-                title=f"Welcome to your {CATEGORIES_DATA['aged_acc']['label']} Ticket!",
-                description=f"{user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist!\n\nPlease describe your issue or request in detail.",
-                color=discord.Color.blue()
-            )
-            
-            # Add form details if provided
-            form_fields = []
-            if self.year_select.value:
-                try:
-                    year = int(self.year_select.value)
-                    if 2015 <= year <= 2020:
-                        form_fields.append(f"<:Aired:1378505206182051850> **Account Year:** {year}")
-                    else:
-                        form_fields.append(f"<:Aired:1378505206182051850> **Account Year:** {self.year_select.value}")
-                except ValueError:
-                    form_fields.append(f"<:Aired:1378505206182051850> **Account Year:** {self.year_select.value}")
-            
-            if self.nitro_select.value:
-                nitro_status = self.nitro_select.value.lower().strip()
-                if "with" in nitro_status and "nitro" in nitro_status:
-                    nitro_formatted = "With Nitro"
-                elif "without" in nitro_status and "nitro" in nitro_status:
-                    nitro_formatted = "Without Nitro"
-                else:
-                    nitro_formatted = self.nitro_select.value
-                form_fields.append(f"<:Aired:1378505206182051850> **Nitro Status:** {nitro_formatted}")
-            
-            if self.additional_details.value:
-                form_fields.append(f"<:Aired:1378505206182051850> **Additional Details:** {self.additional_details.value}")
-            
-            if form_fields:
-                details_embed.add_field(
-                    name="Request Details",
-                    value="\n\n".join(form_fields),
-                    inline=False
-                )
-            
-            details_embed.set_footer(text="A staff member will assist you shortly. Thank you for your patience!")
-            
-            # Create the ticket control view with close and payment buttons
-            ticket_view = TicketControlView()
-            await channel.send(embed=details_embed, view=ticket_view)
-            
-            await interaction.response.send_message(f"✅ Your aged account ticket has been opened: {channel.mention}", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"❌ {error_message}", ephemeral=True)
-
-# --- Interaction Handling (Ticket Creation via Button) ---
-@bot.event
-async def on_interaction(interaction):
-    """Handles interactions, specifically button clicks for ticket creation."""
-    if interaction.type == discord.InteractionType.component and interaction.data['custom_id'] in CATEGORIES_DATA:
-        category_id_key = interaction.data['custom_id']
-        guild = interaction.guild
-        user = interaction.user
-
-        if not guild:
-            await interaction.response.send_message("This action can only be performed in a server.", ephemeral=True)
-            return
-
-        # Special handling for specific categories with forms
-        if category_id_key == "aged_acc":
-            modal = AgedAccountModal()
-            await interaction.response.send_modal(modal)
-            return
-        elif category_id_key == "claims":
-            modal = ClaimsModal()
-            await interaction.response.send_modal(modal)
-            return
-        elif category_id_key == "boosts":
-            modal = ServerBoostModal()
-            await interaction.response.send_modal(modal)
-            return
-        elif category_id_key == "premium":
-            modal = PremiumUpgradeModal()
-            await interaction.response.send_modal(modal)
-            return
-        
-        # Regular ticket creation for other categories
-        channel, error_message = await create_new_ticket(guild, user, category_id_key)
-
-        if channel:
-            await interaction.response.send_message(f"✅ Your ticket has been opened: {channel.mention}", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"❌ {error_message}", ephemeral=True)
-
-# --- New Ticket Command ---
-@bot.command()
-@commands.has_permissions(manage_channels=True)
-async def openticket(ctx, member: discord.Member, category_key: str):
-    """
-    Opens a new ticket for a specified member in a given category.
-    Usage: !openticket <@member> <category_key>
-    Example: !openticket @User claims
-    """
-    if category_key not in CATEGORIES_DATA:
-        available_categories = ", ".join(CATEGORIES_DATA.keys())
-        await ctx.send(f"❌ Invalid category key. Available categories: {available_categories}")
-        return
-
-    # Check if the command is used in a guild
-    if not ctx.guild:
-        await ctx.send("This command can only be used in a server.")
-        return
-
-    channel, error_message = await create_new_ticket(ctx.guild, member, category_key)
-
-    if channel:
-        await ctx.send(f"✅ Ticket opened for {member.mention}: {channel.mention}")
-    else:
-        await ctx.send(f"❌ Could not open ticket for {member.mention}: {error_message}")
-
-# --- Auto-Close Function ---
-async def auto_close_ticket(channel_id, guild_id):
-    """Automatically closes a ticket after a period of inactivity."""
-    log_channel = bot.get_channel(LOG_CHANNEL_ID)
-    try:
-        await asyncio.sleep(AUTO_CLOSE_TIME)
-        guild = bot.get_guild(guild_id)
-        if not guild:
-            print(f"Guild {guild_id} not found for auto-close task. Ticket {channel_id} might be from a removed guild. Cleaning up data.")
-            TICKET_CREATOR.pop(channel_id, None)
-            save_ticket_data()
-            return
-
-        channel = guild.get_channel(channel_id)
-        if channel:
-            messages = []
-            async for msg in channel.history(limit=5, oldest_first=False):
-                messages.append(msg)
-
-            user_messages = [msg for msg in messages if msg.author != bot.user]
-
-            if not user_messages:
-                ticket_creator_id_val = TICKET_CREATOR.pop(channel.id, "Unknown")
-                save_ticket_data()
-                ticket_creator_mention = f"<@{ticket_creator_id_val}>" if ticket_creator_id_val != "Unknown" else "Unknown User"
-
-                close_reason = f"No activity for {AUTO_CLOSE_TIME // 60} minutes (auto-closed)."
-
-                await create_transcript(channel, bot.user, auto_closed=True)
-
-                close_message = (
-                    f"This ticket has been automatically closed due to inactivity ({AUTO_CLOSE_TIME // 60} minutes).\n"
-                    f"Reason: {close_reason}\n"
-                    f"Ticket created by: {ticket_creator_mention}"
-                )
-                await channel.send(close_message)
-                await asyncio.sleep(5)
-                await channel.delete(reason=close_reason)
-
-                if log_channel:
-                    embed = discord.Embed(
-                        title="❌ Ticket Auto-Closed",
-                        description=f"Ticket `{channel.name}` has been auto-closed due to inactivity.",
-                        color=discord.Color.red()
-                    )
-                    embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
-                    embed.add_field(name="Reason", value=close_reason, inline=False)
-                    embed.add_field(name="Ticket Creator User ID", value=ticket_creator_id_val, inline=False)
-                    await log_channel.send(embed=embed)
-                print(f"Auto-closed ticket: {channel.name} ({channel.id})")
-            else:
-                print(f"Ticket {channel.name} has activity, resetting auto-close timer.")
-                task = asyncio.create_task(auto_close_ticket(channel.id, guild.id))
-                ticket_timers[channel.id] = task
-        else:
-            print(f"Ticket channel {channel_id} not found for auto-close (might have been deleted manually or bot restarted). Cleaning up data.")
-            TICKET_CREATOR.pop(channel_id, None)
-            save_ticket_data()
-    except asyncio.CancelledError:
-        print(f"Auto-close task for channel {channel_id} was cancelled.")
-        TICKET_CREATOR.pop(channel_id, None)
-        save_ticket_data()
-    except discord.NotFound:
-        print(f"Channel or message for {channel_id} not found during auto-close (already deleted?). Cleaning up data.")
-        TICKET_CREATOR.pop(channel_id, None)
-        save_ticket_data()
-    except Exception as e:
-        print(f"Error during auto-close of ticket {channel_id}: {e}", file=sys.stderr)
-        traceback.print_exc()
-    finally:
-        ticket_timers.pop(channel_id, None)
-
-# --- Close Command View ---
-class ConfirmView(discord.ui.View):
-    """A view for confirming ticket closure."""
-    def __init__(self, original_author_id):
-        super().__init__(timeout=30)
-        self.original_author_id = original_author_id
-        self.value = None
-
-    @discord.ui.button(label="Confirm Close", style=discord.ButtonStyle.danger)
-    async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.original_author_id:
-            await interaction.response.send_message("You are not authorized to confirm this action.", ephemeral=True)
-            return
-        self.value = True
-        await interaction.response.defer()
-        self.stop()
-
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
-    async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.original_author_id:
-            await interaction.response.send_message("You are not authorized to cancel this action.", ephemeral=True)
-            return
-        self.value = False
-        await interaction.response.defer()
-        self.stop()
-
-    async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-        if self.message:
-            await self.message.edit(content="Ticket close confirmation timed out.", view=self)
-
-# --- Close Command ---
-@bot.command()
-@commands.has_permissions(manage_channels=True)
-async def close(ctx):
-    """Closes the current ticket channel."""
-    log_channel = bot.get_channel(LOG_CHANNEL_ID)
-    if ctx.channel.category and ctx.channel.category.name == "Tickets":
-        staff_role = ctx.guild.get_role(STAFF_ROLE_ID)
-        owner_role = ctx.guild.get_role(OWNER_ROLE_ID)
-        is_staff_or_owner = staff_role in ctx.author.roles or owner_role in ctx.author.roles
-        is_ticket_creator = TICKET_CREATOR.get(ctx.channel.id) == ctx.author.id
-
-        if not (is_staff_or_owner or is_ticket_creator):
-            await ctx.send("❌ You do not have permission to close this ticket.")
-            return
-
-        original_message_sent = await ctx.send(f"Are you sure you want to close this ticket?")
-        view = ConfirmView(ctx.author.id)
-        await original_message_sent.edit(view=view)
-        await view.wait()
-
-        if view.value is True:
-            task = ticket_timers.pop(ctx.channel.id, None)
-            if task:
-                task.cancel()
-
-            # Create transcript before deletion
-            await create_transcript(ctx.channel, ctx.author)
             
             # 10-second countdown
             countdown_embed = discord.Embed(
@@ -1358,4 +646,912 @@ if __name__ == '__main__':
             print(f"An unexpected error occurred during bot execution: {e}", file=sys.stderr)
             traceback.print_exc()
     else:
-        print("Error: DISCORD_TOKEN environment variable not set. Please set it before running the bot.")
+        print("Error: DISCORD_TOKEN environment variable not set. Please set it before running the bot.")="🔒 Ticket Closed",
+                description=f"This ticket has been closed by {interaction.user.mention}.\n\n**⏱️ Deleting in 10 seconds...**",
+                color=discord.Color.red()
+            )
+            countdown_message = await interaction.channel.send(embed=countdown_embed)
+            
+            # Update countdown every second
+            for i in range(9, 0, -1):
+                await asyncio.sleep(1)
+                countdown_embed.description = f"This ticket has been closed by {interaction.user.mention}.\n\n**⏱️ Deleting in {i} seconds...**"
+                try:
+                    await countdown_message.edit(embed=countdown_embed)
+                except:
+                    break  # Message might be deleted or channel gone
+            
+            await asyncio.sleep(1)
+            
+            # Final cleanup and deletion
+            ticket_creator_id_val = TICKET_CREATOR.pop(interaction.channel.id, "Unknown")
+            save_ticket_data()
+            ticket_creator_mention = f"<@{ticket_creator_id_val}>" if ticket_creator_id_val != "Unknown" else "Unknown User"
+            
+            # Log the deletion
+            log_channel = bot.get_channel(LOG_CHANNEL_ID)
+            if log_channel:
+                embed = discord.Embed(
+                    title="✅ Ticket Closed and Deleted",
+                    description=f"Ticket `{interaction.channel.name}` has been closed and deleted.",
+                    color=discord.Color.green()
+                )
+                embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
+                embed.add_field(name="Closed By", value=interaction.user.mention, inline=True)
+                embed.add_field(name="Closure Method", value="Button + Auto-Delete", inline=True)
+                await log_channel.send(embed=embed)
+            
+            await interaction.channel.delete(reason=f"Ticket closed by {interaction.user.name} - auto-deleted after 10s countdown")
+            print(f"Closed and deleted ticket: {interaction.channel.name} ({interaction.channel.id}) by {interaction.user.name}")
+        else:
+            await interaction.response.send_message("You are not authorized to close this ticket.", ephemeral=True)
+    
+    async def payment_methods_callback(self, interaction: discord.Interaction):
+        """Handles the payment methods button click."""
+        embed = discord.Embed(
+            title="💳 Payment Methods",
+            description="Choose your preferred payment method below:",
+            color=discord.Color.blue()
+        )
+        
+        payment_view = PaymentMethodsView()
+        await interaction.response.send_message(embed=embed, view=payment_view, ephemeral=True)
+
+# --- Core Ticket Management Function ---
+async def create_new_ticket(guild: discord.Guild, user: discord.Member, category_id_key: str):
+    """
+    Handles the creation of a new ticket channel.
+
+    Args:
+        guild (discord.Guild): The guild where the ticket is being created.
+        user (discord.Member): The user for whom the ticket is being created.
+        category_id_key (str): The key from CATEGORIES_DATA for the ticket category.
+
+    Returns:
+        tuple: A tuple containing (discord.TextChannel, str) if successful,
+               otherwise (None, str) with an error message.
+    """
+    category_label = CATEGORIES_DATA[category_id_key]["label"]
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+
+    # Check for existing tickets by the user within the specific category
+    for channel_id, creator_id in TICKET_CREATOR.items():
+        if creator_id == user.id:
+            existing_channel = guild.get_channel(channel_id)
+            if existing_channel and existing_channel.category and existing_channel.category.name == "Tickets":
+                channel_name_parts = existing_channel.name.split('-')
+                if channel_name_parts and channel_name_parts[0] == category_id_key:
+                    return None, f"You already have an open ticket in the '{category_label}' category: {existing_channel.mention}. Please close that one first."
+
+    # Find or create "Tickets" category
+    ticket_category = discord.utils.get(guild.categories, name="Tickets")
+    if ticket_category is None:
+        try:
+            ticket_category = await guild.create_category("Tickets", overwrites={
+                guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            })
+            if log_channel:
+                embed = discord.Embed(
+                    title="🆕 New Ticket Category Created",
+                    description=f"Created new ticket category: {ticket_category.mention}",
+                    color=discord.Color.blue()
+                )
+                await log_channel.send(embed=embed)
+        except discord.Forbidden:
+            return None, "I don't have permission to create categories. Please contact an administrator."
+        except Exception as e:
+            print(f"Error creating ticket category: {e}", file=sys.stderr)
+            traceback.print_exc()
+            return None, f"An error occurred creating the ticket category: {e}"
+
+    # Create ticket channel
+    channel_name_base = f"{category_id_key}-{user.display_name}".replace(" ", "-").lower()
+    channel_name = channel_name_base
+    counter = 0
+    while discord.utils.get(ticket_category.channels, name=channel_name):
+        counter += 1
+        channel_name = f"{channel_name_base}-{counter}"
+
+    try:
+        channel = await ticket_category.create_text_channel(channel_name)
+
+        # Set permissions
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False),
+            user: discord.PermissionOverwrite(read_messages=True, send_messages=True, embed_links=True, attach_files=True),
+            guild.get_role(OWNER_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            guild.get_role(STAFF_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
+        }
+        await channel.edit(overwrites=overwrites)
+
+        TICKET_CREATOR[channel.id] = user.id
+        save_ticket_data()
+
+        # Ticket initial message
+        embed = discord.Embed(
+            title=f"Welcome to your {category_label} Ticket!",
+            description=(
+                f"{user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist!\n\n"
+                f"Please describe your issue or request in detail."
+            ),
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text="A staff member will assist you shortly. Thank you for your patience!")
+
+        # Create the ticket control view with close and payment buttons
+        ticket_view = TicketControlView()
+        await channel.send(embed=embed, view=ticket_view)
+
+        if log_channel:
+            embed = discord.Embed(
+                title="📂 Ticket Opened",
+                description=f"A new ticket has been opened: {channel.mention}",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="Ticket Creator", value=user.mention, inline=True)
+            embed.add_field(name="Category", value=category_label, inline=True)
+            embed.add_field(name="Channel Name", value=channel.name, inline=False)
+            await log_channel.send(embed=embed)
+
+        # Start auto-close timer
+        task = asyncio.create_task(auto_close_ticket(channel.id, guild.id))
+        ticket_timers[channel.id] = task
+
+        return channel, None
+
+    except discord.Forbidden:
+        return None, "I don't have permission to create channels in that category or set permissions. Please contact an administrator."
+    except Exception as e:
+        print(f"Error creating ticket channel: {e}", file=sys.stderr)
+        traceback.print_exc()
+        return None, f"An unexpected error occurred: {e}"
+
+# --- Bot Events ---
+@bot.event
+async def on_ready():
+    """Event that fires when the bot is ready."""
+    print(f'Bot {bot.user} is ready!')
+    load_ticket_data()  # Load data on startup
+    
+    # Update bot status on startup
+    await update_bot_status()
+    
+    # Re-launch auto-close timers for existing tickets
+    for channel_id, creator_id in TICKET_CREATOR.items():
+        guild_id = None
+        for guild in bot.guilds:
+            if guild.get_channel(channel_id):
+                guild_id = guild.id
+                break
+        if guild_id:
+            print(f"Restarting timer for ticket channel {channel_id} in guild {guild_id}")
+            task = asyncio.create_task(auto_close_ticket(channel_id, guild_id))
+            ticket_timers[channel_id] = task
+        else:
+            print(f"Could not find guild for channel {channel_id}. Skipping timer restart and cleaning up.")
+            TICKET_CREATOR.pop(channel_id, None)
+            save_ticket_data()
+
+@bot.event
+async def on_command_error(ctx, error):
+    """Global command error handler."""
+    if isinstance(error, commands.CommandNotFound):
+        await ctx.send("❌ That command does not exist. Please check your spelling.")
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(f"❌ Missing a required argument: `{error.param.name}`.")
+    elif isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You don't have the necessary permissions to use this command.")
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send(f"❌ Invalid argument provided: {error}")
+    elif isinstance(error, commands.NoPrivateMessage):
+        await ctx.send("❌ This command cannot be used in private messages.")
+    elif isinstance(error, commands.MemberNotFound):
+        await ctx.send("❌ Member not found. Please provide a valid user or ID.")
+    else:
+        print(f"Ignoring exception in command {ctx.command}:", file=sys.stderr)
+        traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
+        await ctx.send("An unexpected error occurred while running this command. Check the console for details.")
+
+# --- Setup Command ---
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def setup(ctx):
+    """Sets up the ticket system message with category buttons."""
+    embed = discord.Embed(
+        title="Support Ticket System",
+        description=(
+            "Click on a category button below to open a new support ticket.\n"
+            f"Tickets will automatically close after {AUTO_CLOSE_TIME // 60} minutes of inactivity."
+        ),
+        color=discord.Color.purple()
+    )
+    view = discord.ui.View(timeout=None)
+
+    for custom_id, data in CATEGORIES_DATA.items():
+        button = discord.ui.Button(
+            label=data["label"],
+            custom_id=custom_id,
+            emoji=data["emoji_id"],
+            style=data["style"]
+        )
+        view.add_item(button)
+
+    try:
+        await ctx.send(embed=embed, view=view)
+        await ctx.message.delete()
+    except discord.Forbidden:
+        await ctx.author.send("I don't have permission to send messages in that channel or delete commands. Please check my permissions.")
+    except Exception as e:
+        await ctx.send(f"An error occurred during setup: {e}")
+        print(f"Error during setup command: {e}", file=sys.stderr)
+        traceback.print_exc()
+
+# --- Interaction Handling (Ticket Creation via Button) ---
+@bot.event
+async def on_interaction(interaction):
+    """Handles interactions, specifically button clicks for ticket creation."""
+    if interaction.type == discord.InteractionType.component and interaction.data['custom_id'] in CATEGORIES_DATA:
+        category_id_key = interaction.data['custom_id']
+        guild = interaction.guild
+        user = interaction.user
+
+        if not guild:
+            await interaction.response.send_message("This action can only be performed in a server.", ephemeral=True)
+            return
+
+        # Special handling for specific categories with forms
+        if category_id_key == "aged_acc":
+            modal = AgedAccountModal()
+            await interaction.response.send_modal(modal)
+            return
+        elif category_id_key == "claims":
+            modal = ClaimsModal()
+            await interaction.response.send_modal(modal)
+            return
+        elif category_id_key == "boosts":
+            modal = ServerBoostModal()
+            await interaction.response.send_modal(modal)
+            return
+        elif category_id_key == "premium":
+            modal = PremiumUpgradeModal()
+            await interaction.response.send_modal(modal)
+            return
+        
+        # Regular ticket creation for other categories
+        channel, error_message = await create_new_ticket(guild, user, category_id_key)
+
+        if channel:
+            await interaction.response.send_message(f"✅ Your ticket has been opened: {channel.mention}", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ {error_message}", ephemeral=True)
+
+# --- New Ticket Command ---
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def openticket(ctx, member: discord.Member, category_key: str):
+    """
+    Opens a new ticket for a specified member in a given category.
+    Usage: !openticket <@member> <category_key>
+    Example: !openticket @User claims
+    """
+    if category_key not in CATEGORIES_DATA:
+        available_categories = ", ".join(CATEGORIES_DATA.keys())
+        await ctx.send(f"❌ Invalid category key. Available categories: {available_categories}")
+        return
+
+    # Check if the command is used in a guild
+    if not ctx.guild:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    channel, error_message = await create_new_ticket(ctx.guild, member, category_key)
+
+    if channel:
+        await ctx.send(f"✅ Ticket opened for {member.mention}: {channel.mention}")
+    else:
+        await ctx.send(f"❌ Could not open ticket for {member.mention}: {error_message}")
+
+# --- Auto-Close Function ---
+async def auto_close_ticket(channel_id, guild_id):
+    """Automatically closes a ticket after a period of inactivity."""
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    try:
+        await asyncio.sleep(AUTO_CLOSE_TIME)
+        guild = bot.get_guild(guild_id)
+        if not guild:
+            print(f"Guild {guild_id} not found for auto-close task. Ticket {channel_id} might be from a removed guild. Cleaning up data.")
+            TICKET_CREATOR.pop(channel_id, None)
+            save_ticket_data()
+            return
+
+        channel = guild.get_channel(channel_id)
+        if channel:
+            messages = []
+            async for msg in channel.history(limit=5, oldest_first=False):
+                messages.append(msg)
+
+            user_messages = [msg for msg in messages if msg.author != bot.user]
+
+            if not user_messages:
+                ticket_creator_id_val = TICKET_CREATOR.pop(channel.id, "Unknown")
+                save_ticket_data()
+                ticket_creator_mention = f"<@{ticket_creator_id_val}>" if ticket_creator_id_val != "Unknown" else "Unknown User"
+
+                close_reason = f"No activity for {AUTO_CLOSE_TIME // 60} minutes (auto-closed)."
+
+                await create_transcript(channel, bot.user, auto_closed=True)
+
+                close_message = (
+                    f"This ticket has been automatically closed due to inactivity ({AUTO_CLOSE_TIME // 60} minutes).\n"
+                    f"Reason: {close_reason}\n"
+                    f"Ticket created by: {ticket_creator_mention}"
+                )
+                await channel.send(close_message)
+                await asyncio.sleep(5)
+                await channel.delete(reason=close_reason)
+
+                if log_channel:
+                    embed = discord.Embed(
+                        title="❌ Ticket Auto-Closed",
+                        description=f"Ticket `{channel.name}` has been auto-closed due to inactivity.",
+                        color=discord.Color.red()
+                    )
+                    embed.add_field(name="Created By", value=ticket_creator_mention, inline=True)
+                    embed.add_field(name="Reason", value=close_reason, inline=False)
+                    embed.add_field(name="Ticket Creator User ID", value=ticket_creator_id_val, inline=False)
+                    await log_channel.send(embed=embed)
+                print(f"Auto-closed ticket: {channel.name} ({channel.id})")
+            else:
+                print(f"Ticket {channel.name} has activity, resetting auto-close timer.")
+                task = asyncio.create_task(auto_close_ticket(channel.id, guild.id))
+                ticket_timers[channel.id] = task
+        else:
+            print(f"Ticket channel {channel_id} not found for auto-close (might have been deleted manually or bot restarted). Cleaning up data.")
+            TICKET_CREATOR.pop(channel_id, None)
+            save_ticket_data()
+    except asyncio.CancelledError:
+        print(f"Auto-close task for channel {channel_id} was cancelled.")
+        TICKET_CREATOR.pop(channel_id, None)
+        save_ticket_data()
+    except discord.NotFound:
+        print(f"Channel or message for {channel_id} not found during auto-close (already deleted?). Cleaning up data.")
+        TICKET_CREATOR.pop(channel_id, None)
+        save_ticket_data()
+    except Exception as e:
+        print(f"Error during auto-close of ticket {channel_id}: {e}", file=sys.stderr)
+        traceback.print_exc()
+    finally:
+        ticket_timers.pop(channel_id, None)
+
+# --- Close Command View ---
+class ConfirmView(discord.ui.View):
+    """A view for confirming ticket closure."""
+    def __init__(self, original_author_id):
+        super().__init__(timeout=30)
+        self.original_author_id = original_author_id
+        self.value = None
+
+    @discord.ui.button(label="Confirm Close", style=discord.ButtonStyle.danger)
+    async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.original_author_id:
+            await interaction.response.send_message("You are not authorized to confirm this action.", ephemeral=True)
+            return
+        self.value = True
+        await interaction.response.defer()
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.original_author_id:
+            await interaction.response.send_message("You are not authorized to cancel this action.", ephemeral=True)
+            return
+        self.value = False
+        await interaction.response.defer()
+        self.stop()
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            await self.message.edit(content="Ticket close confirmation timed out.", view=self)
+
+# --- Close Command ---
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def close(ctx):
+    """Closes the current ticket channel."""
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    if ctx.channel.category and ctx.channel.category.name == "Tickets":
+        staff_role = ctx.guild.get_role(STAFF_ROLE_ID)
+        owner_role = ctx.guild.get_role(OWNER_ROLE_ID)
+        is_staff_or_owner = staff_role in ctx.author.roles or owner_role in ctx.author.roles
+        is_ticket_creator = TICKET_CREATOR.get(ctx.channel.id) == ctx.author.id
+
+        if not (is_staff_or_owner or is_ticket_creator):
+            await ctx.send("❌ You do not have permission to close this ticket.")
+            return
+
+        original_message_sent = await ctx.send(f"Are you sure you want to close this ticket?")
+        view = ConfirmView(ctx.author.id)
+        await original_message_sent.edit(view=view)
+        await view.wait()
+
+        if view.value is True:
+            task = ticket_timers.pop(ctx.channel.id, None)
+            if task:
+                task.cancel()
+
+            # Create transcript before deletion
+            await create_transcript(ctx.channel, ctx.author)
+            
+            # 10-second countdown
+            countdown_embed = discord.Embed(
+                title(self.claims_count)
+        
+        # Payment method
+        self.payment_method = discord.ui.TextInput(
+            label="Payment Method",
+            placeholder="PayPal, Cash App, Litecoin, Solana, or Other",
+            required=False,
+            max_length=50
+        )
+        self.add_item(self.payment_method)
+        
+        # Additional details
+        self.additional_details = discord.ui.TextInput(
+            label="Additional Details (Optional)",
+            placeholder="Any specific requirements or questions...",
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=500
+        )
+        self.add_item(self.additional_details)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Create combined welcome and details embed
+        details_embed = discord.Embed(
+            title=f"Welcome to your {CATEGORIES_DATA['claims']['label']} Ticket!",
+            description=f"{interaction.user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist!\n\nPlease describe your issue or request in detail.",
+            color=discord.Color.blue()
+        )
+        
+        # Add form details if provided
+        form_fields = []
+        if self.claims_count.value:
+            try:
+                claims_num = int(self.claims_count.value)
+                if claims_num > 0:
+                    form_fields.append(f"<:Aired:1378505206182051850> **Number of Claims:** {claims_num}")
+                else:
+                    form_fields.append(f"<:Aired:1378505206182051850> **Number of Claims:** {self.claims_count.value}")
+            except ValueError:
+                form_fields.append(f"<:Aired:1378505206182051850> **Number of Claims:** {self.claims_count.value}")
+        
+        if self.payment_method.value:
+            form_fields.append(f"<:Aired:1378505206182051850> **Payment Method:** {self.payment_method.value}")
+        
+        if self.additional_details.value:
+            form_fields.append(f"<:Aired:1378505206182051850> **Additional Details:** {self.additional_details.value}")
+        
+        if form_fields:
+            details_embed.add_field(
+                name="Request Details",
+                value="\n\n".join(form_fields),
+                inline=False
+            )
+        
+        details_embed.set_footer(text="A staff member will assist you shortly. Thank you for your patience!")
+        
+        # Create the ticket without sending the default message
+        guild = interaction.guild
+        user = interaction.user
+        
+        # Check for existing tickets by the user within the specific category
+        for channel_id, creator_id in TICKET_CREATOR.items():
+            if creator_id == user.id:
+                existing_channel = guild.get_channel(channel_id)
+                if existing_channel and existing_channel.category and existing_channel.category.name == "Tickets":
+                    channel_name_parts = existing_channel.name.split('-')
+                    if channel_name_parts and channel_name_parts[0] == "claims":
+                        await interaction.response.send_message(f"❌ You already have an open ticket in the 'Claims/Credits' category: {existing_channel.mention}. Please close that one first.", ephemeral=True)
+                        return
+
+        # Create the ticket channel manually
+        category_label = CATEGORIES_DATA['claims']['label']
+        log_channel = bot.get_channel(LOG_CHANNEL_ID)
+        
+        # Find or create "Tickets" category
+        ticket_category = discord.utils.get(guild.categories, name="Tickets")
+        if ticket_category is None:
+            try:
+                ticket_category = await guild.create_category("Tickets", overwrites={
+                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                    guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                })
+            except discord.Forbidden:
+                await interaction.response.send_message("❌ I don't have permission to create categories. Please contact an administrator.", ephemeral=True)
+                return
+            except Exception as e:
+                await interaction.response.send_message(f"❌ An error occurred creating the ticket category: {e}", ephemeral=True)
+                return
+
+        # Create ticket channel
+        channel_name_base = f"claims-{user.display_name}".replace(" ", "-").lower()
+        channel_name = channel_name_base
+        counter = 0
+        while discord.utils.get(ticket_category.channels, name=channel_name):
+            counter += 1
+            channel_name = f"{channel_name_base}-{counter}"
+
+        try:
+            channel = await ticket_category.create_text_channel(channel_name)
+
+            # Set permissions
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False),
+                user: discord.PermissionOverwrite(read_messages=True, send_messages=True, embed_links=True, attach_files=True),
+                guild.get_role(OWNER_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                guild.get_role(STAFF_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
+            }
+            await channel.edit(overwrites=overwrites)
+
+            TICKET_CREATOR[channel.id] = user.id
+            save_ticket_data()
+
+            # Send the combined welcome and form details embed
+            ticket_view = TicketControlView()
+            await channel.send(embed=details_embed, view=ticket_view)
+
+            if log_channel:
+                embed = discord.Embed(
+                    title="📂 Ticket Opened",
+                    description=f"A new ticket has been opened: {channel.mention}",
+                    color=discord.Color.green()
+                )
+                embed.add_field(name="Ticket Creator", value=user.mention, inline=True)
+                embed.add_field(name="Category", value=category_label, inline=True)
+                embed.add_field(name="Channel Name", value=channel.name, inline=False)
+                await log_channel.send(embed=embed)
+
+            # Start auto-close timer
+            task = asyncio.create_task(auto_close_ticket(channel.id, guild.id))
+            ticket_timers[channel.id] = task
+
+            await interaction.response.send_message(f"✅ Your claims/credits ticket has been opened: {channel.mention}", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ I don't have permission to create channels in that category or set permissions. Please contact an administrator.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ An unexpected error occurred: {e}", ephemeral=True)
+
+# --- Server Boost Form Modal ---
+class ServerBoostModal(discord.ui.Modal):
+    """Modal form for server boost ticket details."""
+    
+    def __init__(self):
+        super().__init__(title="Server Boost Details")
+        
+        # Boost duration
+        self.boost_duration = discord.ui.TextInput(
+            label="Boost Duration (1 or 3 months)",
+            placeholder="Enter 1 or 3",
+            required=False,
+            max_length=10
+        )
+        self.add_item(self.boost_duration)
+        
+        # Payment method
+        self.payment_method = discord.ui.TextInput(
+            label="Payment Method",
+            placeholder="PayPal, Cash App, Litecoin, Solana, or Other",
+            required=False,
+            max_length=50
+        )
+        self.add_item(self.payment_method)
+        
+        # Server link (optional)
+        self.server_link = discord.ui.TextInput(
+            label="Server Link (Optional)",
+            placeholder="https://discord.gg/yourserver or leave blank",
+            required=False,
+            max_length=200
+        )
+        self.add_item(self.server_link)
+        
+        # Additional details
+        self.additional_details = discord.ui.TextInput(
+            label="Additional Details (Optional)",
+            placeholder="Any specific requirements or questions...",
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=500
+        )
+        self.add_item(self.additional_details)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Create combined welcome and details embed
+        details_embed = discord.Embed(
+            title=f"Welcome to your {CATEGORIES_DATA['boosts']['label']} Ticket!",
+            description=f"{interaction.user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist!\n\nPlease describe your issue or request in detail.",
+            color=discord.Color.blue()
+        )
+        
+        # Add form details if provided
+        form_fields = []
+        if self.boost_duration.value:
+            duration = self.boost_duration.value.strip()
+            if duration in ["1", "3"]:
+                duration_text = f"{duration} month{'s' if duration == '3' else ''}"
+            else:
+                duration_text = self.boost_duration.value
+            form_fields.append(f"<:Aired:1378505206182051850> **Boost Duration:** {duration_text}")
+        
+        if self.payment_method.value:
+            form_fields.append(f"<:Aired:1378505206182051850> **Payment Method:** {self.payment_method.value}")
+        
+        if self.server_link.value:
+            form_fields.append(f"<:Aired:1378505206182051850> **Server Link:** {self.server_link.value}")
+        
+        if self.additional_details.value:
+            form_fields.append(f"<:Aired:1378505206182051850> **Additional Details:** {self.additional_details.value}")
+        
+        if form_fields:
+            details_embed.add_field(
+                name="Request Details",
+                value="\n\n".join(form_fields),
+                inline=False
+            )
+        
+        details_embed.set_footer(text="A staff member will assist you shortly. Thank you for your patience!")
+        
+        # Create the ticket without sending the default message
+        guild = interaction.guild
+        user = interaction.user
+        
+        # Check for existing tickets by the user within the specific category
+        for channel_id, creator_id in TICKET_CREATOR.items():
+            if creator_id == user.id:
+                existing_channel = guild.get_channel(channel_id)
+                if existing_channel and existing_channel.category and existing_channel.category.name == "Tickets":
+                    channel_name_parts = existing_channel.name.split('-')
+                    if channel_name_parts and channel_name_parts[0] == "boosts":
+                        await interaction.response.send_message(f"❌ You already have an open ticket in the 'Server Boosts' category: {existing_channel.mention}. Please close that one first.", ephemeral=True)
+                        return
+
+        # Create the ticket channel manually
+        category_label = CATEGORIES_DATA['boosts']['label']
+        log_channel = bot.get_channel(LOG_CHANNEL_ID)
+        
+        # Find or create "Tickets" category
+        ticket_category = discord.utils.get(guild.categories, name="Tickets")
+        if ticket_category is None:
+            try:
+                ticket_category = await guild.create_category("Tickets", overwrites={
+                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                    guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                })
+            except discord.Forbidden:
+                await interaction.response.send_message("❌ I don't have permission to create categories. Please contact an administrator.", ephemeral=True)
+                return
+            except Exception as e:
+                await interaction.response.send_message(f"❌ An error occurred creating the ticket category: {e}", ephemeral=True)
+                return
+
+        # Create ticket channel
+        channel_name_base = f"boosts-{user.display_name}".replace(" ", "-").lower()
+        channel_name = channel_name_base
+        counter = 0
+        while discord.utils.get(ticket_category.channels, name=channel_name):
+            counter += 1
+            channel_name = f"{channel_name_base}-{counter}"
+
+        try:
+            channel = await ticket_category.create_text_channel(channel_name)
+
+            # Set permissions
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False),
+                user: discord.PermissionOverwrite(read_messages=True, send_messages=True, embed_links=True, attach_files=True),
+                guild.get_role(OWNER_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                guild.get_role(STAFF_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
+            }
+            await channel.edit(overwrites=overwrites)
+
+            TICKET_CREATOR[channel.id] = user.id
+            save_ticket_data()
+
+            # Send the combined welcome and form details embed
+            ticket_view = TicketControlView()
+            await channel.send(embed=details_embed, view=ticket_view)
+
+            if log_channel:
+                embed = discord.Embed(
+                    title="📂 Ticket Opened",
+                    description=f"A new ticket has been opened: {channel.mention}",
+                    color=discord.Color.green()
+                )
+                embed.add_field(name="Ticket Creator", value=user.mention, inline=True)
+                embed.add_field(name="Category", value=category_label, inline=True)
+                embed.add_field(name="Channel Name", value=channel.name, inline=False)
+                await log_channel.send(embed=embed)
+
+            # Start auto-close timer
+            task = asyncio.create_task(auto_close_ticket(channel.id, guild.id))
+            ticket_timers[channel.id] = task
+
+            await interaction.response.send_message(f"✅ Your server boost ticket has been opened: {channel.mention}", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ I don't have permission to create channels in that category or set permissions. Please contact an administrator.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ An unexpected error occurred: {e}", ephemeral=True)
+
+# --- Premium Upgrade Form Modal ---
+class PremiumUpgradeModal(discord.ui.Modal):
+    """Modal form for premium upgrade ticket details."""
+    
+    def __init__(self):
+        super().__init__(title="Premium Upgrade Details")
+        
+        # Service type
+        self.service_type = discord.ui.TextInput(
+            label="Service (YouTube or Spotify)",
+            placeholder="Enter YouTube or Spotify",
+            required=False,
+            max_length=50
+        )
+        self.add_item(self.service_type)
+        
+        # Payment method
+        self.payment_method = discord.ui.TextInput(
+            label="Payment Method",
+            placeholder="PayPal, Cash App, Litecoin, Solana, or Other",
+            required=False,
+            max_length=50
+        )
+        self.add_item(self.payment_method)
+        
+        # Additional details
+        self.additional_details = discord.ui.TextInput(
+            label="Additional Details (Optional)",
+            placeholder="Any specific requirements or questions...",
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=500
+        )
+        self.add_item(self.additional_details)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Create combined welcome and details embed
+        details_embed = discord.Embed(
+            title=f"Welcome to your {CATEGORIES_DATA['premium']['label']} Ticket!",
+            description=f"{interaction.user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist!\n\nPlease describe your issue or request in detail.",
+            color=discord.Color.blue()
+        )
+        
+        # Add form details if provided
+        form_fields = []
+        if self.service_type.value:
+            service = self.service_type.value.lower().strip()
+            if "youtube" in service:
+                service_formatted = "YouTube Premium"
+            elif "spotify" in service:
+                service_formatted = "Spotify Premium"
+            else:
+                service_formatted = self.service_type.value
+            form_fields.append(f"<:Aired:1378505206182051850> **Service:** {service_formatted}")
+        
+        if self.payment_method.value:
+            form_fields.append(f"<:Aired:1378505206182051850> **Payment Method:** {self.payment_method.value}")
+        
+        if self.additional_details.value:
+            form_fields.append(f"<:Aired:1378505206182051850> **Additional Details:** {self.additional_details.value}")
+        
+        if form_fields:
+            details_embed.add_field(
+                name="Request Details",
+                value="\n\n".join(form_fields),
+                inline=False
+            )
+        
+        details_embed.set_footer(text="A staff member will assist you shortly. Thank you for your patience!")
+        
+        # Create the ticket without sending the default message
+        guild = interaction.guild
+        user = interaction.user
+        
+        # Check for existing tickets by the user within the specific category
+        for channel_id, creator_id in TICKET_CREATOR.items():
+            if creator_id == user.id:
+                existing_channel = guild.get_channel(channel_id)
+                if existing_channel and existing_channel.category and existing_channel.category.name == "Tickets":
+                    channel_name_parts = existing_channel.name.split('-')
+                    if channel_name_parts and channel_name_parts[0] == "premium":
+                        await interaction.response.send_message(f"❌ You already have an open ticket in the 'Premium Upgrades' category: {existing_channel.mention}. Please close that one first.", ephemeral=True)
+                        return
+
+        # Create the ticket channel manually
+        category_label = CATEGORIES_DATA['premium']['label']
+        log_channel = bot.get_channel(LOG_CHANNEL_ID)
+        
+        # Find or create "Tickets" category
+        ticket_category = discord.utils.get(guild.categories, name="Tickets")
+        if ticket_category is None:
+            try:
+                ticket_category = await guild.create_category("Tickets", overwrites={
+                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                    guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                })
+            except discord.Forbidden:
+                await interaction.response.send_message("❌ I don't have permission to create categories. Please contact an administrator.", ephemeral=True)
+                return
+            except Exception as e:
+                await interaction.response.send_message(f"❌ An error occurred creating the ticket category: {e}", ephemeral=True)
+                return
+
+        # Create ticket channel
+        channel_name_base = f"premium-{user.display_name}".replace(" ", "-").lower()
+        channel_name = channel_name_base
+        counter = 0
+        while discord.utils.get(ticket_category.channels, name=channel_name):
+            counter += 1
+            channel_name = f"{channel_name_base}-{counter}"
+
+        try:
+            channel = await ticket_category.create_text_channel(channel_name)
+
+            # Set permissions
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False),
+                user: discord.PermissionOverwrite(read_messages=True, send_messages=True, embed_links=True, attach_files=True),
+                guild.get_role(OWNER_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                guild.get_role(STAFF_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
+            }
+            await channel.edit(overwrites=overwrites)
+
+            TICKET_CREATOR[channel.id] = user.id
+            save_ticket_data()
+
+            # Send the combined welcome and form details embed
+            ticket_view = TicketControlView()
+            await channel.send(embed=details_embed, view=ticket_view)
+
+            if log_channel:
+                embed = discord.Embed(
+                    title="📂 Ticket Opened",
+                    description=f"A new ticket has been opened: {channel.mention}",
+                    color=discord.Color.green()
+                )
+                embed.add_field(name="Ticket Creator", value=user.mention, inline=True)
+                embed.add_field(name="Category", value=category_label, inline=True)
+                embed.add_field(name="Channel Name", value=channel.name, inline=False)
+                await log_channel.send(embed=embed)
+
+            # Start auto-close timer
+            task = asyncio.create_task(auto_close_ticket(channel.id, guild.id))
+            ticket_timers[channel.id] = task
+
+            await interaction.response.send_message(f"✅ Your premium upgrade ticket has been opened: {channel.mention}", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ I don't have permission to create channels in that category or set permissions. Please contact an administrator.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ An unexpected error occurred: {e}", ephemeral=True)
+
+# --- Aged Account Form Modal ---
+class AgedAccountModal(discord.ui.Modal):
+    """Modal form for aged account ticket details."""
+    
+    def __init__(self):
+        super().__init__(title="Aged Account Details")
+        
+        # Year selection
+        self.year_select = discord.ui.TextInput(
+            label="Account Year (2015-2020)",
+            placeholder="Enter the year (e.g., 2017)",
+            required=False,
+            max_length=10
+        )
+        self.add_item
