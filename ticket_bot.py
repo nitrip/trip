@@ -297,17 +297,16 @@ async def create_new_ticket(guild: discord.Guild, user: discord.Member, category
         TICKET_CREATOR[channel.id] = user.id
         save_ticket_data()
 
-        # Ticket initial message (removed payment methods from embed)
+        # Ticket initial message
         embed = discord.Embed(
             title=f"Welcome to your {category_label} Ticket!",
             description=(
-                f"{user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist! 🛠️\n\n"
-                f"📌 **Please describe your issue or request in detail.**\n"
-                f"When communicating, please be clear and provide all necessary information."
+                f"{user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist!\n\n"
+                f"Please describe your issue or request in detail."
             ),
             color=discord.Color.blue()
         )
-        embed.set_footer(text="A staff member will assist you shortly. Thank you for your patience! 💙")
+        embed.set_footer(text="A staff member will assist you shortly. Thank you for your patience!")
 
         # Create the ticket control view with close and payment buttons
         ticket_view = TicketControlView()
@@ -460,12 +459,15 @@ class PremiumUpgradeModal(discord.ui.Modal):
         channel, error_message = await create_new_ticket(guild, user, "premium")
         
         if channel:
-            # Send the form details to the ticket channel
+            # Create combined welcome and details embed
             details_embed = discord.Embed(
-                title="<:Aired:1378505206182051850> Premium Upgrade Request Details",
+                title=f"Welcome to your {CATEGORIES_DATA['premium']['label']} Ticket!",
+                description=f"{user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist!\n\nPlease describe your issue or request in detail.",
                 color=discord.Color.blue()
             )
             
+            # Add form details if provided
+            form_fields = []
             if self.service_type.value:
                 service = self.service_type.value.lower().strip()
                 if "youtube" in service:
@@ -474,17 +476,27 @@ class PremiumUpgradeModal(discord.ui.Modal):
                     service_formatted = "Spotify Premium"
                 else:
                     service_formatted = self.service_type.value
-                details_embed.add_field(name="Service", value=service_formatted, inline=True)
+                form_fields.append(f"<:Aired:1378505206182051850> **Service:** {service_formatted}")
             
             if self.payment_method.value:
-                details_embed.add_field(name="Payment Method", value=self.payment_method.value, inline=True)
-            
-            details_embed.add_field(name="Requested By", value=user.mention, inline=True)
+                form_fields.append(f"<:Aired:1378505206182051850> **Payment Method:** {self.payment_method.value}")
             
             if self.additional_details.value:
-                details_embed.add_field(name="Additional Details", value=self.additional_details.value, inline=False)
+                form_fields.append(f"<:Aired:1378505206182051850> **Additional Details:** {self.additional_details.value}")
             
-            await channel.send(embed=details_embed)
+            if form_fields:
+                details_embed.add_field(
+                    name="Request Details",
+                    value="\n\n".join(form_fields),
+                    inline=False
+                )
+            
+            details_embed.set_footer(text="A staff member will assist you shortly. Thank you for your patience!")
+            
+            # Create the ticket control view with close and payment buttons
+            ticket_view = TicketControlView()
+            await channel.send(embed=details_embed, view=ticket_view)
+            
             await interaction.response.send_message(f"✅ Your premium upgrade ticket has been opened: {channel.mention}", ephemeral=True)
         else:
             await interaction.response.send_message(f"❌ {error_message}", ephemeral=True)
@@ -541,32 +553,45 @@ class ServerBoostModal(discord.ui.Modal):
         channel, error_message = await create_new_ticket(guild, user, "boosts")
         
         if channel:
-            # Send the form details to the ticket channel
+            # Create combined welcome and details embed
             details_embed = discord.Embed(
-                title="<:Aired:1378505206182051850> Server Boost Request Details",
+                title=f"Welcome to your {CATEGORIES_DATA['boosts']['label']} Ticket!",
+                description=f"{user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist!\n\nPlease describe your issue or request in detail.",
                 color=discord.Color.blue()
             )
             
+            # Add form details if provided
+            form_fields = []
             if self.boost_duration.value:
                 duration = self.boost_duration.value.strip()
                 if duration in ["1", "3"]:
                     duration_text = f"{duration} month{'s' if duration == '3' else ''}"
                 else:
                     duration_text = self.boost_duration.value
-                details_embed.add_field(name="Boost Duration", value=duration_text, inline=True)
+                form_fields.append(f"<:Aired:1378505206182051850> **Boost Duration:** {duration_text}")
             
             if self.payment_method.value:
-                details_embed.add_field(name="Payment Method", value=self.payment_method.value, inline=True)
-            
-            details_embed.add_field(name="Requested By", value=user.mention, inline=True)
+                form_fields.append(f"<:Aired:1378505206182051850> **Payment Method:** {self.payment_method.value}")
             
             if self.server_link.value:
-                details_embed.add_field(name="Server Link", value=self.server_link.value, inline=False)
+                form_fields.append(f"<:Aired:1378505206182051850> **Server Link:** {self.server_link.value}")
             
             if self.additional_details.value:
-                details_embed.add_field(name="Additional Details", value=self.additional_details.value, inline=False)
+                form_fields.append(f"<:Aired:1378505206182051850> **Additional Details:** {self.additional_details.value}")
             
-            await channel.send(embed=details_embed)
+            if form_fields:
+                details_embed.add_field(
+                    name="Request Details",
+                    value="\n\n".join(form_fields),
+                    inline=False
+                )
+            
+            details_embed.set_footer(text="A staff member will assist you shortly. Thank you for your patience!")
+            
+            # Create the ticket control view with close and payment buttons
+            ticket_view = TicketControlView()
+            await channel.send(embed=details_embed, view=ticket_view)
+            
             await interaction.response.send_message(f"✅ Your server boost ticket has been opened: {channel.mention}", ephemeral=True)
         else:
             await interaction.response.send_message(f"❌ {error_message}", ephemeral=True)
@@ -614,31 +639,44 @@ class ClaimsModal(discord.ui.Modal):
         channel, error_message = await create_new_ticket(guild, user, "claims")
         
         if channel:
-            # Send the form details to the ticket channel
+            # Create combined welcome and details embed
             details_embed = discord.Embed(
-                title="<:Aired:1378505206182051850> Claims/Credits Request Details",
+                title=f"Welcome to your {CATEGORIES_DATA['claims']['label']} Ticket!",
+                description=f"{user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist!\n\nPlease describe your issue or request in detail.",
                 color=discord.Color.blue()
             )
             
+            # Add form details if provided
+            form_fields = []
             if self.claims_count.value:
                 try:
                     claims_num = int(self.claims_count.value)
                     if claims_num > 0:
-                        details_embed.add_field(name="Number of Claims", value=str(claims_num), inline=True)
+                        form_fields.append(f"<:Aired:1378505206182051850> **Number of Claims:** {claims_num}")
                     else:
-                        details_embed.add_field(name="Number of Claims", value=self.claims_count.value, inline=True)
+                        form_fields.append(f"<:Aired:1378505206182051850> **Number of Claims:** {self.claims_count.value}")
                 except ValueError:
-                    details_embed.add_field(name="Number of Claims", value=self.claims_count.value, inline=True)
+                    form_fields.append(f"<:Aired:1378505206182051850> **Number of Claims:** {self.claims_count.value}")
             
             if self.payment_method.value:
-                details_embed.add_field(name="Payment Method", value=self.payment_method.value, inline=True)
-            
-            details_embed.add_field(name="Requested By", value=user.mention, inline=True)
+                form_fields.append(f"<:Aired:1378505206182051850> **Payment Method:** {self.payment_method.value}")
             
             if self.additional_details.value:
-                details_embed.add_field(name="Additional Details", value=self.additional_details.value, inline=False)
+                form_fields.append(f"<:Aired:1378505206182051850> **Additional Details:** {self.additional_details.value}")
             
-            await channel.send(embed=details_embed)
+            if form_fields:
+                details_embed.add_field(
+                    name="Request Details",
+                    value="\n\n".join(form_fields),
+                    inline=False
+                )
+            
+            details_embed.set_footer(text="A staff member will assist you shortly. Thank you for your patience!")
+            
+            # Create the ticket control view with close and payment buttons
+            ticket_view = TicketControlView()
+            await channel.send(embed=details_embed, view=ticket_view)
+            
             await interaction.response.send_message(f"✅ Your claims/credits ticket has been opened: {channel.mention}", ephemeral=True)
         else:
             await interaction.response.send_message(f"❌ {error_message}", ephemeral=True)
@@ -686,21 +724,24 @@ class AgedAccountModal(discord.ui.Modal):
         channel, error_message = await create_new_ticket(guild, user, "aged_acc")
         
         if channel:
-            # Send the form details to the ticket channel
+            # Create combined welcome and details embed
             details_embed = discord.Embed(
-                title="<:emoji_1736873097239:1385896691642929243> Aged Account Request Details",
+                title=f"Welcome to your {CATEGORIES_DATA['aged_acc']['label']} Ticket!",
+                description=f"{user.mention} has opened a ticket. <@&{STAFF_ROLE_ID}>, please assist!\n\nPlease describe your issue or request in detail.",
                 color=discord.Color.blue()
             )
             
+            # Add form details if provided
+            form_fields = []
             if self.year_select.value:
                 try:
                     year = int(self.year_select.value)
                     if 2015 <= year <= 2020:
-                        details_embed.add_field(name="Account Year", value=str(year), inline=True)
+                        form_fields.append(f"<:Aired:1378505206182051850> **Account Year:** {year}")
                     else:
-                        details_embed.add_field(name="Account Year", value=self.year_select.value, inline=True)
+                        form_fields.append(f"<:Aired:1378505206182051850> **Account Year:** {self.year_select.value}")
                 except ValueError:
-                    details_embed.add_field(name="Account Year", value=self.year_select.value, inline=True)
+                    form_fields.append(f"<:Aired:1378505206182051850> **Account Year:** {self.year_select.value}")
             
             if self.nitro_select.value:
                 nitro_status = self.nitro_select.value.lower().strip()
@@ -710,14 +751,24 @@ class AgedAccountModal(discord.ui.Modal):
                     nitro_formatted = "Without Nitro"
                 else:
                     nitro_formatted = self.nitro_select.value
-                details_embed.add_field(name="Nitro Status", value=nitro_formatted, inline=True)
-            
-            details_embed.add_field(name="Requested By", value=user.mention, inline=True)
+                form_fields.append(f"<:Aired:1378505206182051850> **Nitro Status:** {nitro_formatted}")
             
             if self.additional_details.value:
-                details_embed.add_field(name="Additional Details", value=self.additional_details.value, inline=False)
+                form_fields.append(f"<:Aired:1378505206182051850> **Additional Details:** {self.additional_details.value}")
             
-            await channel.send(embed=details_embed)
+            if form_fields:
+                details_embed.add_field(
+                    name="Request Details",
+                    value="\n\n".join(form_fields),
+                    inline=False
+                )
+            
+            details_embed.set_footer(text="A staff member will assist you shortly. Thank you for your patience!")
+            
+            # Create the ticket control view with close and payment buttons
+            ticket_view = TicketControlView()
+            await channel.send(embed=details_embed, view=ticket_view)
+            
             await interaction.response.send_message(f"✅ Your aged account ticket has been opened: {channel.mention}", ephemeral=True)
         else:
             await interaction.response.send_message(f"❌ {error_message}", ephemeral=True)
