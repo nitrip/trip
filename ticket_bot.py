@@ -24,7 +24,7 @@ CATEGORIES_DATA = {
     "claims": {"label": "Claims/Credits", "emoji_id": "<a:Gift:1368420677648121876>", "style": discord.ButtonStyle.success},
     "boosts": {"label": "Server Boosts", "emoji_id": "<a:NitroBooster:1368420767577931836>", "style": discord.ButtonStyle.primary},
     "premium": {"label": "Premium Upgrades", "emoji_id": "<:upvote:1376850180644667462>", "style": discord.ButtonStyle.secondary},
-    "guildtag": {"label": "Guild Tag", "emoji_id": "<:sword:1378322540229033994>", "style": discord.ButtonStyle.secondary},
+    "aged_acc": {"label": "Aged Accounts", "emoji_id": "<:Box:1375787598240284804>", "style": discord.ButtonStyle.secondary},
     "others": {"label": "Others", "emoji_id": "<:shopping_cart_green12:1376614180869898311>", "style": discord.ButtonStyle.secondary}
 }
 
@@ -397,6 +397,88 @@ async def setup(ctx):
         print(f"Error during setup command: {e}", file=sys.stderr)
         traceback.print_exc()
 
+# --- Aged Account Form Modal ---
+class AgedAccountModal(discord.ui.Modal):
+    """Modal form for aged account ticket details."""
+    
+    def __init__(self):
+        super().__init__(title="Aged Account Details")
+        
+        # Year selection
+        self.year_select = discord.ui.TextInput(
+            label="Account Year (2015-2020)",
+            placeholder="Enter the year (e.g., 2017)",
+            min_length=4,
+            max_length=4,
+            required=True
+        )
+        self.add_item(self.year_select)
+        
+        # Nitro status
+        self.nitro_select = discord.ui.TextInput(
+            label="Nitro Status",
+            placeholder="Type 'with nitro' or 'without nitro'",
+            min_length=4,
+            max_length=20,
+            required=True
+        )
+        self.add_item(self.nitro_select)
+        
+        # Additional details
+        self.additional_details = discord.ui.TextInput(
+            label="Additional Details (Optional)",
+            placeholder="Any specific requirements or questions...",
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=500
+        )
+        self.add_item(self.additional_details)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Validate year
+        try:
+            year = int(self.year_select.value)
+            if year < 2015 or year > 2020:
+                await interaction.response.send_message("❌ Please enter a valid year between 2015 and 2020.", ephemeral=True)
+                return
+        except ValueError:
+            await interaction.response.send_message("❌ Please enter a valid year (numbers only).", ephemeral=True)
+            return
+        
+        # Validate nitro status
+        nitro_status = self.nitro_select.value.lower().strip()
+        if "with" in nitro_status and "nitro" in nitro_status:
+            nitro_formatted = "With Nitro"
+        elif "without" in nitro_status and "nitro" in nitro_status:
+            nitro_formatted = "Without Nitro"
+        else:
+            await interaction.response.send_message("❌ Please specify either 'with nitro' or 'without nitro'.", ephemeral=True)
+            return
+        
+        # Create the ticket
+        guild = interaction.guild
+        user = interaction.user
+        
+        channel, error_message = await create_new_ticket(guild, user, "aged_acc")
+        
+        if channel:
+            # Send the form details to the ticket channel
+            details_embed = discord.Embed(
+                title="<:emoji_1736873097239:1385896691642929243> Aged Account Request Details",
+                color=discord.Color.blue()
+            )
+            details_embed.add_field(name="Account Year", value=str(year), inline=True)
+            details_embed.add_field(name="Nitro Status", value=nitro_formatted, inline=True)
+            details_embed.add_field(name="Requested By", value=user.mention, inline=True)
+            
+            if self.additional_details.value:
+                details_embed.add_field(name="Additional Details", value=self.additional_details.value, inline=False)
+            
+            await channel.send(embed=details_embed)
+            await interaction.response.send_message(f"✅ Your aged account ticket has been opened: {channel.mention}", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ {error_message}", ephemeral=True)
+
 # --- Interaction Handling (Ticket Creation via Button) ---
 @bot.event
 async def on_interaction(interaction):
@@ -410,6 +492,13 @@ async def on_interaction(interaction):
             await interaction.response.send_message("This action can only be performed in a server.", ephemeral=True)
             return
 
+        # Special handling for aged accounts category
+        if category_id_key == "aged_acc":
+            modal = AgedAccountModal()
+            await interaction.response.send_modal(modal)
+            return
+        
+        # Regular ticket creation for other categories
         channel, error_message = await create_new_ticket(guild, user, category_id_key)
 
         if channel:
